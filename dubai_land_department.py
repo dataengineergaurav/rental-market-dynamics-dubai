@@ -100,7 +100,7 @@ def main():
 
             logger.info(f"Processing star schema: {sql_file.name}")
             query = sql_file.read_text().strip().removesuffix(".")
-            output_file = f"output/{sql_file.stem}.parquet"
+            output_file = f"{sql_file.stem}.parquet"
 
             result = StarSchema(base_df, query).transform()
             result.write_parquet(output_file)
