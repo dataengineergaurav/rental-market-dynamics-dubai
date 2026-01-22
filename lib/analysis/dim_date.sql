@@ -1,21 +1,21 @@
--- =========================
--- dim_date (start + end)
--- =========================
-SELECT DISTINCT
-    (EXTRACT(YEAR FROM contract_start_date) * 10000 + EXTRACT(MONTH FROM contract_start_date) * 100 + EXTRACT(DAY FROM contract_start_date)) AS date_key,
-    contract_start_date AS full_date,
-    EXTRACT(YEAR FROM contract_start_date) AS year,
-    EXTRACT(QUARTER FROM contract_start_date) AS quarter,
-    EXTRACT(MONTH FROM contract_start_date) AS month,
-    EXTRACT(DAY FROM contract_start_date) AS day
-FROM rent_contracts_df
-UNION
-SELECT DISTINCT
-    (EXTRACT(YEAR FROM contract_end_date) * 10000 + EXTRACT(MONTH FROM contract_end_date) * 100 + EXTRACT(DAY FROM contract_end_date)) AS date_key,
-    contract_end_date AS full_date,
-    EXTRACT(YEAR FROM contract_end_date) AS year,
-    EXTRACT(QUARTER FROM contract_end_date) AS quarter,
-    EXTRACT(MONTH FROM contract_end_date) AS month,
-    EXTRACT(DAY FROM contract_end_date) AS day
-FROM rent_contracts_df;
+-- -- =========================
+-- -- dim_date (start + end)
+-- -- =========================
+-- SELECT DISTINCT
+--     (EXTRACT(YEAR FROM contract_start_date) * 10000 + EXTRACT(MONTH FROM contract_start_date) * 100 + EXTRACT(DAY FROM contract_start_date)) AS date_key,
+--     contract_start_date AS full_date,
+--     EXTRACT(YEAR FROM contract_start_date) AS year,
+--     EXTRACT(QUARTER FROM contract_start_date) AS quarter,
+--     EXTRACT(MONTH FROM contract_start_date) AS month,
+--     EXTRACT(DAY FROM contract_start_date) AS day
+-- FROM rent_contracts_df
+-- UNION
+-- SELECT DISTINCT
+--     (EXTRACT(YEAR FROM contract_end_date) * 10000 + EXTRACT(MONTH FROM contract_end_date) * 100 + EXTRACT(DAY FROM contract_end_date)) AS date_key,
+--     contract_end_date AS full_date,
+--     EXTRACT(YEAR FROM contract_end_date) AS year,
+--     EXTRACT(QUARTER FROM contract_end_date) AS quarter,
+--     EXTRACT(MONTH FROM contract_end_date) AS month,
+--     EXTRACT(DAY FROM contract_end_date) AS day
+-- FROM rent_contracts_df;
 
