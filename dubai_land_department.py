@@ -100,6 +100,16 @@ def main():
 
             logger.info(f"Processing star schema: {sql_file.name}")
             query = sql_file.read_text().strip().removesuffix(".")
+            
+            # Simple check to see if there's any actual SQL content (not just comments)
+            # Polars SQL parser fails if no executable statement is found.
+            lines = [line.strip() for line in query.splitlines()]
+            has_sql = any(line and not line.startswith(("--", "/*")) for line in lines)
+            
+            if not has_sql:
+                logger.warning(f"Skipping {sql_file.name}: No executable SQL statements found (only comments or whitespace).")
+                continue
+
             output_file = f"{sql_file.stem}_{date.today()}.parquet"
 
             result = StarSchema(base_df, query).transform()
