@@ -67,7 +67,7 @@ def publish_to_github_release(files):
     Data files uploads to GitHub Release
     """
     try:
-        publisher = GitHubRelease('ggurjar333/rental-market-dynamics-dubai')
+        publisher = GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai')
         publisher.publish(files=files)
 
     except Exception as e:
@@ -83,7 +83,7 @@ def main():
     parquet_filename = f'dld_rent_contracts_{date.today()}.parquet'
     property_usage_report_file = f'dld_property_usage_report_{date.today()}.csv'
 
-    release_checker = GitHubRelease('ggurjar333/rental-market-dynamics-dubai')
+    release_checker = GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai')
     release_name = f'release-{date.today()}'
     
     if not release_checker.release_exists(release_name):
