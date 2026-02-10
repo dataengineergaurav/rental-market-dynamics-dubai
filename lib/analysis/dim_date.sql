@@ -18,7 +18,7 @@ WITH RECURSIVE calendar(d) AS (
         CAST(strftime('%d', d) AS INTEGER)          AS day_of_month,
         ((CAST(strftime('%m', d) AS INTEGER) - 1) / 3) + 1 AS quarter,
         ((strftime('%w', d) + 6) % 7) + 1            AS day_of_week
-    FROM calendar;
+    FROM calendar
 )
 
 select * from dim_date;
