@@ -1,8 +1,8 @@
-# Real Estate Analysis Dubai
+# Rental Market Dynamics - Dubai
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/ggurjar333/real-estate-analysis-dubai/build_and_deploy.yml?branch=dev)
-![License](https://img.shields.io/github/license/ggurjar333/real-estate-analysis-dubai)
-![Coverage](https://img.shields.io/codecov/c/github/ggurjar333/real-estate-analysis-dubai)
+![Build Status](https://img.shields.io/github/actions/workflow/status/ggurjar333/rental-market-dynamics-dubai/build_and_deploy.yml?branch=dev)
+![License](https://img.shields.io/github/license/ggurjar333/rental-market-dynamics-dubai)
+![Coverage](https://img.shields.io/codecov/c/github/ggurjar333/rental-market-dynamics-dubai)
 
 This repository contains the code and rent contracts data for analyzing real estate properties in Dubai. The project automates the extraction, transformation, and analysis of rent contracts, providing insights into property usage.
 
@@ -24,8 +24,8 @@ This repository contains the code and rent contracts data for analyzing real est
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/ggurjar333/real-estate-analysis-dubai.git
-   cd real-estate-analysis-dubai
+   git clone https://github.com/ggurjar333/rental-market-dynamics-dubai
+   cd rental-market-dynamics-dubai
 
 2. **Set up a virtual environment**
     ```bash
@@ -53,9 +53,6 @@ This repository contains the code and rent contracts data for analyzing real est
 │   │   ├── build_and_deploy.yml
 │   │   └── cron.yml
 │   └── dependabot.yml
-├── .devcontainer
-│   ├── Dockerfile
-│   └── devcontainer.json
 ├── docs
 │   └── architecture.md
 ├── lib
@@ -101,7 +98,7 @@ This repository contains the code and rent contracts data for analyzing real est
 
 
 ## Historical Data
-   Download the historical data from [releases](https://github.com/dubaidataguy/real-estate-analysis-dubai/releases).
+   Download the historical data from [releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases
 
 ## Contributing
 Contributions are welcome! Please review the [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
