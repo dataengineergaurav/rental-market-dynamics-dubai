@@ -275,6 +275,20 @@ class DuckDBStore:
         try:
             logger.info("Gold: Creating star schema...")
             
+            # Check if tables already exist to avoid recreation errors
+            if self.table_exists("gold.fact_rent_contract"):
+                logger.info("Gold schema already exists. Skipping recreation.")
+                # Get existing row counts
+                results['dim_date'] = self.get_row_count("gold.dim_date")
+                results['dim_contract_type'] = self.get_row_count("gold.dim_contract_type")
+                results['dim_property'] = self.get_row_count("gold.dim_property")
+                results['dim_project'] = self.get_row_count("gold.dim_project")
+                results['dim_location'] = self.get_row_count("gold.dim_location")
+                results['dim_tenant'] = self.get_row_count("gold.dim_tenant")
+                results['fact_rent_contract'] = self.get_row_count("gold.fact_rent_contract")
+                logger.info(f"Gold: Found existing schema with {len(results)} tables")
+                return results
+            
             # Create dimension tables
             results['dim_date'] = self._gold_create_dim_date()
             results['dim_contract_type'] = self._gold_create_dim_contract_type()
