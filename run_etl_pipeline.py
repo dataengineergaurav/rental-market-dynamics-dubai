@@ -26,6 +26,7 @@ from lib.extract.rent_contracts_downloader import RentContractsDownloader
 from lib.logging_helpers import get_logger, configure_root_logger
 from lib.transform.rent_contracts_transformer import RentContractsTransformer
 from lib.workspace import DuckDBStore, GitHubRelease
+from typing import Optional
 
 load_dotenv()
 
@@ -166,7 +167,7 @@ def export_silver_parquet(db_path: str, output_path: str) -> str:
         raise
 
 
-def publish_artifacts_to_github(files: list, release_notes: str | None = None) -> None:
+def publish_artifacts_to_github(files: list, release_notes: Optional[str] = None) -> None:
     """Publish data artifacts to GitHub Release.
     
     Args:
