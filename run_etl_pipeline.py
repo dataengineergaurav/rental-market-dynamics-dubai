@@ -166,14 +166,69 @@ def export_silver_parquet(db_path: str, output_path: str) -> str:
         raise
 
 
-def main():
-    """Main ETL pipeline entry point."""
+def publish_artifacts_to_github(files: list, release_notes: str | None = None) -> None:
+    """Publish data artifacts to GitHub Release.
+    
+    Args:
+        files: List of file paths to publish (parquet, db, release notes)
+        release_notes: Path to release notes file
+    """
+    logger.info("=== PUBLISH: GitHub Release ===")
+    
+    # Check for GitHub token
+    if not os.getenv("GH_TOKEN"):
+        logger.warning("GH_TOKEN not set. Skipping GitHub publication.")
+        logger.info("To publish, set GH_TOKEN environment variable.")
+        return
+    
+    try:
+        # Add release notes if provided
+        all_files = files.copy()
+        if release_notes and os.path.exists(release_notes):
+            all_files.append(release_notes)
+        
+        # Filter to only existing files
+        existing_files = [f for f in all_files if os.path.exists(f)]
+        missing_files = [f for f in all_files if not os.path.exists(f)]
+        
+        if missing_files:
+            logger.warning(f"Missing files (skipped): {missing_files}")
+        
+        if not existing_files:
+            logger.error("No files to publish!")
+            return
+        
+        logger.info(f"Publishing {len(existing_files)} files to GitHub:")
+        for f in existing_files:
+            size_mb = os.path.getsize(f) / (1024 * 1024)
+            logger.info(f"  - {f} ({size_mb:.1f} MB)")
+        
+        # Publish to GitHub
+        publisher = GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai')
+        publisher.publish(files=existing_files)
+        
+        logger.info("✓ GitHub publication complete!")
+        
+    except Exception as e:
+        logger.error(f"GitHub publication failed: {e}")
+        raise
+
+
+def main(publish_to_github: bool = False):
+    """Main ETL pipeline entry point.
+
+    Args:
+        publish_to_github: Whether to publish artifacts to GitHub release
+                          (requires GH_TOKEN environment variable)
+    """
     logger.info("=" * 60)
     logger.info("DUBAI RENTAL MARKET ETL PIPELINE")
     logger.info("Medallion Architecture: Bronze -> Silver -> Gold")
     logger.info("Optimized: Single parquet + Virtual views")
+    if publish_to_github:
+        logger.info("Mode: PUBLISH (artifacts will be uploaded to GitHub)")
     logger.info("=" * 60)
-    
+
     # Get configuration
     url = os.getenv("DLD_URL")
     if not url:
@@ -185,21 +240,30 @@ def main():
     csv_filename = f'output/rent_contracts_{date.today()}.csv'
     db_path = "rental_data.db"
     silver_parquet = f'rent_contracts_silver_{date_str}.parquet'
-    
+    release_notes = "RELEASE_NOTES.md"
+
     try:
         # Phase 1: Download
         download_rent_contracts(url, csv_filename)
-        
+
         # Phase 2: Medallion Architecture (Bronze -> Silver -> Gold + View)
         medallion_results = medallion_pipeline(csv_filename, db_path)
-        
+
         # Phase 3: Export Silver Parquet (single source of truth)
         parquet_path = export_silver_parquet(db_path, silver_parquet)
-        
+
+        # Phase 4: Publish to GitHub (optional)
+        if publish_to_github:
+            artifacts = [
+                db_path,           # Full database
+                silver_parquet,    # Silver parquet
+            ]
+            publish_artifacts_to_github(artifacts, release_notes)
+
         logger.info("=" * 60)
         logger.info("ETL PIPELINE COMPLETED SUCCESSFULLY")
         logger.info("=" * 60)
-        
+
         # Log final summary
         logger.info("FINAL OUTPUTS:")
         logger.info(f"  - CSV: {csv_filename}")
@@ -210,7 +274,10 @@ def main():
         logger.info(f"    * Silver: {medallion_results['silver']}")
         logger.info(f"    * Gold: {medallion_results['gold']}")
         logger.info(f"  - Expiring View (15d): {medallion_results['expiring_view']:,} contracts")
-        
+
+        if publish_to_github:
+            logger.info("\n📦 Artifacts published to GitHub Release")
+
     except Exception as e:
         logger.error(f"ETL pipeline failed: {e}")
         raise
