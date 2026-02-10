@@ -41,7 +41,7 @@ build:
 # ETL: Run the extraction, transformation, and loading process
 etl:
 	@echo "Running ETL process..."
-	python dubai_land_department.py
+	python run_etl_pipeline.py
 
 # Test: Run all tests using pytest
 test:

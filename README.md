@@ -35,6 +35,8 @@ This repository contains the code and rent contracts data for analyzing real est
 
 3. **Install dependencies**
     ```bash
+    python -m venv .venv
+    source .venv/bin/activate
     make build
     ```
 
@@ -91,6 +93,9 @@ This repository contains the code and rent contracts data for analyzing real est
 - **Downloading & Transforming Data**:
     
     The ETL process downloads rent contracts, transforms the data into Parquet format, and generates a property usage report. Logs are saved in ``etl.log``.
+    ```bash
+    python run_etl_pipeline.py
+    ```
 
 - **Publishing Releases**:
 
