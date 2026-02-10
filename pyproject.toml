@@ -20,6 +20,7 @@ dependencies = [
     "jupyter",
     "requests-mock",
     "lib",
+    "duckdb",
 ]
 
 [tool.setuptools.packages.find]
