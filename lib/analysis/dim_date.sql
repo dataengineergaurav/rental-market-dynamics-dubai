@@ -2,23 +2,28 @@
 -- dim_date
 -- =========================
 
-WITH RECURSIVE calendar(d) AS (
-    SELECT DATE('2020-01-01')
+INSERT INTO dim_date (
+    date_key,
+    full_date,
+    year,
+    month,
+    day_of_month,
+    quarter,
+    day_of_week
+)
+WITH RECURSIVE calendar AS (
+    SELECT DATE '2020-01-01' AS d
     UNION ALL
-    SELECT DATE(d, '+1 day')
+    SELECT d + INTERVAL '1 day'
     FROM calendar
-    WHERE d < DATE('2035-12-31')
+    WHERE d < DATE '2035-12-31'
 )
-, dim_date (
-    SELECT
-        CAST(strftime('%Y%m%d', d) AS INTEGER)      AS date_key,
-        d                                           AS full_date,
-        CAST(strftime('%Y', d) AS INTEGER)          AS year,
-        CAST(strftime('%m', d) AS INTEGER)          AS month,
-        CAST(strftime('%d', d) AS INTEGER)          AS day_of_month,
-        ((CAST(strftime('%m', d) AS INTEGER) - 1) / 3) + 1 AS quarter,
-        ((strftime('%w', d) + 6) % 7) + 1            AS day_of_week
-    FROM calendar
-)
-
-select * from dim_date;
+SELECT
+    CAST(strftime('%Y%m%d', d) AS INTEGER)      AS date_key,
+    d                                           AS full_date,
+    YEAR(d)                                     AS year,
+    MONTH(d)                                    AS month,
+    DAY(d)                                      AS day_of_month,
+    QUARTER(d)                                  AS quarter,
+    (EXTRACT(DOW FROM d) + 1)                   AS day_of_week
+FROM calendar;

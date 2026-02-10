@@ -1,16 +1,31 @@
+"""
+ETL Pipeline for Dubai Rental Market Data with Medallion Architecture.
+
+This pipeline implements a three-layer medallion architecture:
+- Bronze: Raw data ingestion from source
+- Silver: Cleaned and validated data (single source of truth)
+- Gold: Business-ready star schema + views for analytics
+
+Optimized design:
+- Single parquet export (Silver only)
+- Virtual view for expiring contracts (no duplicate database)
+- Clean separation with no redundant storage
+
+Usage:
+    python run_etl_pipeline.py
+"""
+
 from pathlib import Path
 import polars as pl
 import os
-import subprocess
 from datetime import date
 from dotenv import load_dotenv
 import logging
 
 from lib.extract.rent_contracts_downloader import RentContractsDownloader
 from lib.logging_helpers import get_logger, configure_root_logger
-from lib.transform.rent_contracts_transformer import RentContractsTransformer, StarSchema
-from lib.classes.property_usage import PropertyUsage
-from lib.workspace.github_client import GitHubRelease
+from lib.transform.rent_contracts_transformer import RentContractsTransformer
+from lib.workspace import DuckDBStore, GitHubRelease
 
 load_dotenv()
 
@@ -18,111 +33,188 @@ configure_root_logger(logfile="etl.log", loglevel="DEBUG")
 logger = get_logger("ETL")
 
 
-def download_rent_contracts(url, filename):
-    logger.info("Downloading rent contracts")
+def download_rent_contracts(url: str, filename: str) -> bool:
+    """Download rent contracts data from source.
+    
+    Args:
+        url: Source URL for the data
+        filename: Local filename to save the data
+        
+    Returns:
+        True if download successful or file already exists
+    """
+    logger.info("=== PHASE: Download ===")
+    
     if os.path.isfile(filename):
-        logger.info(f"{filename} already exists. Skipping download.")
-        return
+        logger.info(f"File already exists: {filename}. Skipping download.")
+        return True
 
-    logger.info(f"{filename} not found. Running RentContractsDownloader.")
+    logger.info(f"Downloading from {url} to {filename}")
     try:
         downloader = RentContractsDownloader(url)
         downloader.run(filename)
+        logger.info(f"Download complete: {filename}")
+        return True
     except Exception as e:
-        logger.error(f"Error downloading rent contracts: {e}")
+        logger.error(f"Download failed: {e}")
         raise
 
-def transform_rent_contracts(input_file, output_file):
-    if not os.path.isfile(input_file):
-        logger.error(f"{input_file} not found. Cannot transform.")
-        return
-    if not os.path.isfile(output_file):
-        logger.info(f"Transforming {input_file} to {output_file}.")
-        try:
-            transformer = RentContractsTransformer(input_file, output_file)
-            transformer.transform()
-        except Exception as e:
-            logger.error(f"Error transforming rent contracts: {e}")
-            raise
-    else:
-        logger.info(f"{output_file} exists")
 
-def get_property_usage(input_file, output_file):
-    if not os.path.isfile(input_file):
-        logger.error(f"{input_file} not found. Cannot get property usage.")
-        return
+def medallion_pipeline(
+    csv_file: str, 
+    db_path: str = "rental_data.db"
+) -> dict:
+    """Execute full medallion architecture pipeline.
+    
+    Args:
+        csv_file: Path to the source CSV file
+        db_path: Path to the DuckDB database file
+        
+    Returns:
+        Dictionary with row counts for each layer
+    """
+    logger.info("=== MEDALLION ARCHITECTURE PIPELINE ===")
+    
+    results = {
+        "bronze": {},
+        "silver": {},
+        "gold": {},
+        "expiring_view": 0
+    }
+    
     try:
-        property_usage = PropertyUsage(output_file)
-        property_usage.transform(input_file)
-        logger.info(f"Property usage saved to {output_file}")
+        with DuckDBStore(db_path) as store:
+            # =====================================================================
+            # BRONZE LAYER: Raw data ingestion
+            # =====================================================================
+            logger.info("=== BRONZE LAYER: Raw Data Ingestion ===")
+            
+            bronze_rows = store.bronze_ingest_csv(csv_file, "rent_contracts")
+            results["bronze"]["rent_contracts"] = bronze_rows
+            
+            logger.info(f"Bronze layer complete: {bronze_rows:,} raw rows")
+            
+            # =====================================================================
+            # SILVER LAYER: Cleaned and validated data
+            # =====================================================================
+            logger.info("=== SILVER LAYER: Data Cleaning & Validation ===")
+            
+            silver_rows = store.silver_clean_rent_contracts()
+            results["silver"]["rent_contracts"] = silver_rows
+            
+            logger.info(f"Silver layer complete: {silver_rows:,} cleaned rows")
+            
+            # =====================================================================
+            # GOLD LAYER: Star schema for analytics
+            # =====================================================================
+            logger.info("=== GOLD LAYER: Star Schema Creation ===")
+            
+            gold_results = store.gold_create_star_schema()
+            results["gold"] = gold_results
+            
+            logger.info("Gold layer complete:")
+            for table, count in gold_results.items():
+                logger.info(f"  - {table}: {count:,} rows")
+            
+            # =====================================================================
+            # EXPIRING CONTRACTS VIEW (Virtual - no physical duplication)
+            # =====================================================================
+            logger.info("=== EXPIRING CONTRACTS VIEW (15 days) ===")
+            
+            expiring_count = store.create_expiring_view(days_window=15)
+            results["expiring_view"] = expiring_count
+            
+            logger.info(f"Expiring view created: {expiring_count:,} contracts")
+            
+            # Get complete summary
+            summary = store.get_medallion_summary()
+            
+            logger.info("=== MEDALLION ARCHITECTURE SUMMARY ===")
+            for layer, tables in summary.items():
+                total_rows = sum(tables.values())
+                logger.info(f"{layer.upper()}: {len(tables)} tables, {total_rows:,} total rows")
+                for table, count in tables.items():
+                    logger.info(f"  - {layer}.{table}: {count:,} rows")
+            
+            return results
+            
     except Exception as e:
-        logger.error(f"Error getting property usage: {e}")
+        logger.error(f"Medallion pipeline failed: {e}")
         raise
-    else:
-        logger.info(f"{output_file} exists")
 
 
-def publish_to_github_release(files):
+def export_silver_parquet(db_path: str, output_path: str) -> str:
+    """Export silver layer to parquet (single source of truth).
+    
+    Args:
+        db_path: Path to DuckDB database
+        output_path: Path for parquet export
+        
+    Returns:
+        Path to exported file
     """
-    Data files uploads to GitHub Release
-    """
+    logger.info("=== EXPORT: Silver to Parquet ===")
+    
     try:
-        publisher = GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai')
-        publisher.publish(files=files)
-
+        with DuckDBStore(db_path) as store:
+            result = store.export_silver_to_parquet(output_path)
+            logger.info(f"Export complete: {result}")
+            return result
+            
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")    
+        logger.error(f"Export failed: {e}")
+        raise
+
 
 def main():
+    """Main ETL pipeline entry point."""
+    logger.info("=" * 60)
+    logger.info("DUBAI RENTAL MARKET ETL PIPELINE")
+    logger.info("Medallion Architecture: Bronze -> Silver -> Gold")
+    logger.info("Optimized: Single parquet + Virtual views")
+    logger.info("=" * 60)
+    
+    # Get configuration
     url = os.getenv("DLD_URL")
     if not url:
         logger.error("DLD_URL environment variable not set.")
         return
 
+    # Define file paths
+    date_str = date.today().strftime('%Y%m%d')
     csv_filename = f'output/rent_contracts_{date.today()}.csv'
-    parquet_filename = f'dld_rent_contracts_{date.today()}.parquet'
-    property_usage_report_file = f'dld_property_usage_report_{date.today()}.csv'
-
-    release_checker = GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai')
-    release_name = f'release-{date.today()}'
+    db_path = "rental_data.db"
+    silver_parquet = f'rent_contracts_silver_{date_str}.parquet'
     
-    if not release_checker.release_exists(release_name):
+    try:
+        # Phase 1: Download
         download_rent_contracts(url, csv_filename)
-        transform_rent_contracts(csv_filename, parquet_filename)
-        SQL_DIR = Path("lib/analysis")
-
-        # Load the base dataframe once for all transformations
-        base_df = pl.scan_parquet(parquet_filename).collect()
         
-        for sql_file in sorted(SQL_DIR.glob("*.sql")):
-            if not sql_file.stem.startswith(("dim_", "fact_")):
-                continue
+        # Phase 2: Medallion Architecture (Bronze -> Silver -> Gold + View)
+        medallion_results = medallion_pipeline(csv_filename, db_path)
+        
+        # Phase 3: Export Silver Parquet (single source of truth)
+        parquet_path = export_silver_parquet(db_path, silver_parquet)
+        
+        logger.info("=" * 60)
+        logger.info("ETL PIPELINE COMPLETED SUCCESSFULLY")
+        logger.info("=" * 60)
+        
+        # Log final summary
+        logger.info("FINAL OUTPUTS:")
+        logger.info(f"  - CSV: {csv_filename}")
+        logger.info(f"  - Silver Parquet: {parquet_path}")
+        logger.info(f"  - Database: {db_path}")
+        logger.info("  - Database Layers:")
+        logger.info(f"    * Bronze: {medallion_results['bronze']}")
+        logger.info(f"    * Silver: {medallion_results['silver']}")
+        logger.info(f"    * Gold: {medallion_results['gold']}")
+        logger.info(f"  - Expiring View (15d): {medallion_results['expiring_view']:,} contracts")
+        
+    except Exception as e:
+        logger.error(f"ETL pipeline failed: {e}")
+        raise
 
-            logger.info(f"Processing star schema: {sql_file.name}")
-            query = sql_file.read_text().strip().removesuffix(".")
-            
-            # Simple check to see if there's any actual SQL content (not just comments)
-            # Polars SQL parser fails if no executable statement is found.
-            lines = [line.strip() for line in query.splitlines()]
-            has_sql = any(line and not line.startswith(("--", "/*")) for line in lines)
-            
-            if not has_sql:
-                logger.warning(f"Skipping {sql_file.name}: No executable SQL statements found (only comments or whitespace).")
-                continue
-
-            output_file = f"{sql_file.stem}_{date.today()}.parquet"
-
-            result = StarSchema(base_df, query).transform()
-            result.write_parquet(output_file)
-            logger.info(f"Saved star schema to {output_file}")
-
-        # List the parquet files into one list
-        parquet_files = [str(file) for file in Path(".").glob("*.parquet")]
-        # get_property_usage(parquet_filename, property_usage_report_file)
-        publish_to_github_release(parquet_files)
-    else:
-        logger.info(f"Release '{release_name}' already exists. No action needed.")
-            
 
 if __name__ == "__main__":
     main()
