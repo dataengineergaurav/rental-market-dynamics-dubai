@@ -283,7 +283,7 @@ class DuckDBStore:
             if self.table_exists("gold.fact_rent_contract"):
                 logger.info("Gold schema already exists. Skipping recreation.")
                 # Get existing row counts
-                results['dim_date'] = self.get_row_count("gold.dim_date")
+                # results['dim_date'] = self.get_row_count("gold.dim_date")
                 results['dim_contract_type'] = self.get_row_count("gold.dim_contract_type")
                 results['dim_property'] = self.get_row_count("gold.dim_property")
                 results['dim_project'] = self.get_row_count("gold.dim_project")
@@ -294,7 +294,7 @@ class DuckDBStore:
                 return results
             
             # Create dimension tables
-            results['dim_date'] = self._gold_create_dim_date()
+            # results['dim_date'] = self._gold_create_dim_date()
             results['dim_contract_type'] = self._gold_create_dim_contract_type()
             results['dim_property'] = self._gold_create_dim_property()
             results['dim_project'] = self._gold_create_dim_project()
@@ -686,7 +686,7 @@ class DuckDBStore:
             result = self.connection.execute("""
                 SELECT table_schema || '.' || table_name
                 FROM information_schema.tables 
-                WHERE table_schema IN ('bronze', 'silver', 'gold', 'main')
+                WHERE table_schema IN ('gold')
                 ORDER BY table_schema, table_name
             """).fetchall()
         return [row[0] for row in result]
@@ -698,12 +698,10 @@ class DuckDBStore:
     def get_medallion_summary(self) -> Dict[str, Any]:
         """Get summary of all layers in medallion architecture."""
         summary = {
-            "bronze": {},
-            "silver": {},
             "gold": {}
         }
         
-        for layer in ["bronze", "silver", "gold"]:
+        for layer in ["gold"]:
             tables = self.list_tables(layer)
             for table in tables:
                 full_name = f"{layer}.{table}"
