@@ -267,12 +267,9 @@ def main(publish_to_github: bool = False):
 
         # Log final summary
         logger.info("FINAL OUTPUTS:")
-        logger.info(f"  - CSV: {csv_filename}")
         logger.info(f"  - Silver Parquet: {parquet_path}")
         logger.info(f"  - Database: {db_path}")
         logger.info("  - Database Layers:")
-        logger.info(f"    * Bronze: {medallion_results['bronze']}")
-        logger.info(f"    * Silver: {medallion_results['silver']}")
         logger.info(f"    * Gold: {medallion_results['gold']}")
         logger.info(f"  - Expiring View (15d): {medallion_results['expiring_view']:,} contracts")
 

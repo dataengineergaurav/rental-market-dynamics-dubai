@@ -278,6 +278,9 @@ class DuckDBStore:
         
         try:
             logger.info("Gold: Creating star schema...")
+            # Delete the bronze layer
+            self.connection.execute("DROP SCHEMA IF EXISTS bronze CASCADE")
+            logger.info("Bronze schema dropped to free up space")
             
             # Check if tables already exist to avoid recreation errors
             if self.table_exists("gold.fact_rent_contract"):
@@ -303,6 +306,10 @@ class DuckDBStore:
             
             # Create fact table
             results['fact_rent_contract'] = self._gold_create_fact_table()
+
+            # Delete the silver layer to free up space
+            self.connection.execute("DROP SCHEMA IF EXISTS silver CASCADE")
+            logger.info("Silver schema dropped to free up space")
             
             # Create indexes for performance
             self._gold_create_indexes()
