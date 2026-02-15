@@ -134,6 +134,10 @@ class DuckDBStore:
                 
             row_count = self.get_row_count(full_table_name)
             logger.info(f"Bronze: Ingested {row_count:,} rows into '{table_name}' from {csv_path}")
+            # Delete the original CSV file after successful ingestion
+            csv_path.unlink()
+            logger.info(f"Bronze: Deleted source CSV file {csv_path}")
+
             return row_count
             
         except Exception as e:
