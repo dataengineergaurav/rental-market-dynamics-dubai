@@ -95,7 +95,7 @@ def medallion_pipeline(
             
             # Export bronze layer to parquet for backup (optional, can be skipped in optimized design)
             output_path = f"bronze.parquet"
-            store.export_to_parquet("bronze_rent_contracts", output_path)
+            store.export_to_parquet("bronze.rent_contracts", output_path)
             logger.info(f"Bronze layer complete: {bronze_rows:,} raw rows")
             
             # Delete the bronze layer to free up space (optional, can be skipped in optimized design)
