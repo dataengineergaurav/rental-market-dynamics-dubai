@@ -93,8 +93,15 @@ def medallion_pipeline(
             bronze_rows = store.bronze_ingest_csv(csv_file, "rent_contracts")
             results["bronze"]["rent_contracts"] = bronze_rows
             
+            # Export bronze layer to parquet for backup (optional, can be skipped in optimized design)
+            output_path = f"{db_path}_bronze.parquet"
+            store.export_to_parquet("bronze_rent_contracts", output_path)
             logger.info(f"Bronze layer complete: {bronze_rows:,} raw rows")
             
+            # Delete the bronze layer to free up space (optional, can be skipped in optimized design)
+            store.connection.execute("DROP SCHEMA IF EXISTS bronze CASCADE")
+            logger.info("Bronze schema dropped to free up space")
+
             # =====================================================================
             # SILVER LAYER: Cleaned and validated data
             # =====================================================================
@@ -103,7 +110,14 @@ def medallion_pipeline(
             silver_rows = store.silver_clean_rent_contracts()
             results["silver"]["rent_contracts"] = silver_rows
             
+            # Export silver layer to parquet (single source of truth for cleaned data)
+            silver_parquet_path = f"{db_path}_silver.parquet"
+            store.export_to_parquet("silver_rent_contracts", silver_parquet_path)
             logger.info(f"Silver layer complete: {silver_rows:,} cleaned rows")
+
+            # Delete the silver layer to free up space (optional, can be skipped in optimized design)
+            store.connection.execute("DROP SCHEMA IF EXISTS silver CASCADE")
+            logger.info("Silver schema dropped to free up space")
             
             # =====================================================================
             # GOLD LAYER: Star schema for analytics
@@ -143,28 +157,6 @@ def medallion_pipeline(
         logger.error(f"Medallion pipeline failed: {e}")
         raise
 
-
-def export_silver_parquet(db_path: str, output_path: str) -> str:
-    """Export silver layer to parquet (single source of truth).
-    
-    Args:
-        db_path: Path to DuckDB database
-        output_path: Path for parquet export
-        
-    Returns:
-        Path to exported file
-    """
-    logger.info("=== EXPORT: Silver to Parquet ===")
-    
-    try:
-        with DuckDBStore(db_path) as store:
-            result = store.export_silver_to_parquet(output_path)
-            logger.info(f"Export complete: {result}")
-            return result
-            
-    except Exception as e:
-        logger.error(f"Export failed: {e}")
-        raise
 
 
 def publish_artifacts_to_github(files: list, release_notes: Optional[str] = None) -> None:
@@ -249,9 +241,6 @@ def main(publish_to_github: bool = False):
 
         # Phase 2: Medallion Architecture (Bronze -> Silver -> Gold + View)
         medallion_results = medallion_pipeline(csv_filename, db_path)
-
-        # Phase 3: Export Silver Parquet (single source of truth)
-        parquet_path = export_silver_parquet(db_path, silver_parquet)
 
         # Phase 4: Publish to GitHub (optional)
         if publish_to_github:

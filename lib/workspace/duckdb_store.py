@@ -278,9 +278,6 @@ class DuckDBStore:
         
         try:
             logger.info("Gold: Creating star schema...")
-            # Delete the bronze layer
-            self.connection.execute("DROP SCHEMA IF EXISTS bronze CASCADE")
-            logger.info("Bronze schema dropped to free up space")
             
             # Check if tables already exist to avoid recreation errors
             if self.table_exists("gold.fact_rent_contract"):
@@ -306,10 +303,6 @@ class DuckDBStore:
             
             # Create fact table
             results['fact_rent_contract'] = self._gold_create_fact_table()
-
-            # Delete the silver layer to free up space
-            self.connection.execute("DROP SCHEMA IF EXISTS silver CASCADE")
-            logger.info("Silver schema dropped to free up space")
             
             # Create indexes for performance
             self._gold_create_indexes()
@@ -329,7 +322,8 @@ class DuckDBStore:
                 SELECT 
                     MIN(contract_start_date) as min_date,
                     MAX(contract_end_date) as max_date
-                FROM silver.rent_contracts
+                # FROM silver.rent_contracts
+                FROM read_parquet('{self.db_path}_silver.parquet')
                 WHERE contract_start_date IS NOT NULL
                   AND contract_end_date IS NOT NULL
             ),
@@ -359,7 +353,7 @@ class DuckDBStore:
         return self.get_row_count("gold.dim_date")
     
     def _gold_create_dim_contract_type(self) -> int:
-        """Create contract type dimension."""
+        """Create contract type dimension from silver data layer parquet file."""
         self.connection.execute("""
             CREATE OR REPLACE TABLE gold.dim_contract_type AS
             SELECT 
@@ -375,7 +369,8 @@ class DuckDBStore:
                     contract_id,
                     contract_reg_type_en,
                     contract_reg_type_ar
-                FROM silver.rent_contracts
+                # FROM silver.rent_contracts
+                FROM read_parquet('{self.db_path}_silver.parquet')
                 WHERE contract_reg_type_id IS NOT NULL
             )
         """)
@@ -411,7 +406,8 @@ class DuckDBStore:
                     ejari_property_sub_type_ar,
                     property_usage_en,
                     property_usage_ar
-                FROM silver.rent_contracts
+                # FROM silver.rent_contracts
+                FROM read_parquet('{self.db_path}_silver.parquet')
                 WHERE ejari_bus_property_type_id IS NOT NULL
             )
         """)
@@ -436,7 +432,8 @@ class DuckDBStore:
                     project_name_en,
                     master_project_ar,
                     master_project_en
-                FROM silver.rent_contracts
+                # FROM silver.rent_contracts
+                FROM read_parquet('{self.db_path}_silver.parquet')
                 WHERE project_number IS NOT NULL
             )
         """)
@@ -471,7 +468,8 @@ class DuckDBStore:
                     nearest_landmark_ar,
                     nearest_metro_ar,
                     nearest_mall_ar
-                FROM silver.rent_contracts
+                # FROM silver.rent_contracts
+                FROM read_parquet('{self.db_path}_silver.parquet')
             )
         """)
         return self.get_row_count("gold.dim_location")
@@ -491,7 +489,8 @@ class DuckDBStore:
                     tenant_type_id,
                     tenant_type_en,
                     tenant_type_ar
-                FROM silver.rent_contracts
+                # FROM silver.rent_contracts
+                FROM read_parquet('{self.db_path}_silver.parquet')
                 WHERE tenant_type_id IS NOT NULL
             )
         """)
@@ -531,7 +530,8 @@ class DuckDBStore:
                 rc._has_date_issues,
                 rc._has_amount_issues
                 
-            FROM silver.rent_contracts rc
+            # FROM silver.rent_contracts rc
+            FROM read_parquet('{self.db_path}_silver.parquet') rc
             LEFT JOIN gold.dim_contract_type dct
                 ON rc.contract_reg_type_id = dct.contract_reg_type_id
             LEFT JOIN gold.dim_project dprj
@@ -567,12 +567,25 @@ class DuckDBStore:
     # =========================================================================
     
     def export_silver_to_parquet(self, output_path: Union[str, Path], compression: str = "zstd") -> str:
-        """Export silver layer to Parquet format.
-        
-        Silver layer is the single source of truth for downstream analytics.
-        Contains cleaned data with proper types and quality flags.
+        """Export the silver layer to Parquet format.
         
         Args:
+            output_path: Path for the output parquet file
+            compression: Compression algorithm (zstd, snappy, gzip, etc.)
+            
+        Returns:
+            Path to the exported file
+        """
+        return self.export_to_parquet("silver.rent_contracts", output_path, compression)
+    
+    # =========================================================================
+    # PARQUET export 
+    # =========================================================================
+    def export_to_parquet(self, table_name: str, output_path: Union[str, Path], compression: str = "zstd") -> str:
+        """Export any table to Parquet format.
+        
+        Args:
+            table_name: Name of the table to export (supports schema prefix)
             output_path: Path for the output parquet file
             compression: Compression algorithm (zstd, snappy, gzip, etc.)
             
@@ -583,21 +596,21 @@ class DuckDBStore:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
-            logger.info(f"Exporting silver layer to {output_path}")
+            logger.info(f"Exporting {table_name} to {output_path}")
             self.connection.execute(f"""
-                COPY silver.rent_contracts 
+                COPY {table_name} 
                 TO '{output_path}' 
                 (FORMAT PARQUET, COMPRESSION '{compression}')
             """)
             
-            row_count = self.get_row_count("silver.rent_contracts")
+            row_count = self.get_row_count(table_name)
             file_size = output_path.stat().st_size / (1024 * 1024)  # MB
             
-            logger.info(f"Silver export complete: {row_count:,} rows, {file_size:.1f} MB")
+            logger.info(f"Export complete: {row_count:,} rows, {file_size:.1f} MB")
             return str(output_path)
             
         except Exception as e:
-            logger.error(f"Failed to export silver to parquet: {e}")
+            logger.error(f"Failed to export {table_name} to parquet: {e}")
             raise
 
     # =========================================================================
