@@ -239,7 +239,8 @@ class DuckDBStore:
                         ELSE FALSE 
                     END as _has_amount_issues
                     
-                FROM bronze.rent_contracts
+                # FROM bronze.rent_contracts
+                FROM read_parquet('bronze.parquet')
             """)
             
             row_count = self.get_row_count("silver.rent_contracts")
@@ -296,16 +297,20 @@ class DuckDBStore:
             # Create dimension tables
             # results['dim_date'] = self._gold_create_dim_date()
             results['dim_contract_type'] = self._gold_create_dim_contract_type()
+            # export gold dimensions to parquet for backup (optional)
+            self.export_to_parquet("gold.dim_contract_type", "gold_dim_contract_type.parquet")
             results['dim_property'] = self._gold_create_dim_property()
+            self.export_to_parquet("gold.dim_property", "gold_dim_property.parquet")
             results['dim_project'] = self._gold_create_dim_project()
+            self.export_to_parquet("gold.dim_project", "gold_dim_project.parquet")
             results['dim_location'] = self._gold_create_dim_location()
+            self.export_to_parquet("gold.dim_location", "gold_dim_location.parquet")
             results['dim_tenant'] = self._gold_create_dim_tenant()
+            self.export_to_parquet("gold.dim_tenant", "gold_dim_tenant.parquet")
             
             # Create fact table
             results['fact_rent_contract'] = self._gold_create_fact_table()
-            
-            # Create indexes for performance
-            self._gold_create_indexes()
+            self.export_to_parquet("gold.fact_rent_contract", "gold_fact_rent_contract.parquet")
             
             logger.info(f"Gold: Star schema created with {len(results)} tables")
             return results
@@ -323,7 +328,7 @@ class DuckDBStore:
                     MIN(contract_start_date) as min_date,
                     MAX(contract_end_date) as max_date
                 # FROM silver.rent_contracts
-                FROM read_parquet('{self.db_path}_silver.parquet')
+                FROM read_parquet('silver.parquet')
                 WHERE contract_start_date IS NOT NULL
                   AND contract_end_date IS NOT NULL
             ),
@@ -370,7 +375,7 @@ class DuckDBStore:
                     contract_reg_type_en,
                     contract_reg_type_ar
                 # FROM silver.rent_contracts
-                FROM read_parquet('{self.db_path}_silver.parquet')
+                FROM read_parquet('silver.parquet')
                 WHERE contract_reg_type_id IS NOT NULL
             )
         """)
@@ -407,7 +412,7 @@ class DuckDBStore:
                     property_usage_en,
                     property_usage_ar
                 # FROM silver.rent_contracts
-                FROM read_parquet('{self.db_path}_silver.parquet')
+                FROM read_parquet('silver.parquet')
                 WHERE ejari_bus_property_type_id IS NOT NULL
             )
         """)
@@ -433,7 +438,7 @@ class DuckDBStore:
                     master_project_ar,
                     master_project_en
                 # FROM silver.rent_contracts
-                FROM read_parquet('{self.db_path}_silver.parquet')
+                FROM read_parquet('silver.parquet')
                 WHERE project_number IS NOT NULL
             )
         """)
@@ -469,7 +474,7 @@ class DuckDBStore:
                     nearest_metro_ar,
                     nearest_mall_ar
                 # FROM silver.rent_contracts
-                FROM read_parquet('{self.db_path}_silver.parquet')
+                FROM read_parquet('silver.parquet')
             )
         """)
         return self.get_row_count("gold.dim_location")
@@ -490,7 +495,7 @@ class DuckDBStore:
                     tenant_type_en,
                     tenant_type_ar
                 # FROM silver.rent_contracts
-                FROM read_parquet('{self.db_path}_silver.parquet')
+                FROM read_parquet('silver.parquet')
                 WHERE tenant_type_id IS NOT NULL
             )
         """)
@@ -531,7 +536,7 @@ class DuckDBStore:
                 rc._has_amount_issues
                 
             # FROM silver.rent_contracts rc
-            FROM read_parquet('{self.db_path}_silver.parquet') rc
+            FROM read_parquet('silver.parquet') rc
             LEFT JOIN gold.dim_contract_type dct
                 ON rc.contract_reg_type_id = dct.contract_reg_type_id
             LEFT JOIN gold.dim_project dprj
@@ -546,22 +551,6 @@ class DuckDBStore:
         """)
         return self.get_row_count("gold.fact_rent_contract")
     
-    def _gold_create_indexes(self) -> None:
-        """Create indexes on dimension and fact tables."""
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_gold_dim_contract_type ON gold.dim_contract_type(contract_reg_type_id)",
-            "CREATE INDEX IF NOT EXISTS idx_gold_dim_property ON gold.dim_property(ejari_bus_property_type_id, ejari_property_type_id)",
-            "CREATE INDEX IF NOT EXISTS idx_gold_dim_project ON gold.dim_project(project_number)",
-            "CREATE INDEX IF NOT EXISTS idx_gold_dim_location ON gold.dim_location(area_id)",
-            "CREATE INDEX IF NOT EXISTS idx_gold_dim_tenant ON gold.dim_tenant(tenant_type_id)",
-            "CREATE INDEX IF NOT EXISTS idx_gold_fact_start_date ON gold.fact_rent_contract(start_date_key)",
-            "CREATE INDEX IF NOT EXISTS idx_gold_fact_end_date ON gold.fact_rent_contract(end_date_key)",
-        ]
-        
-        for idx in indexes:
-            self.connection.execute(idx)
-        logger.info("Gold: Indexes created on star schema tables")
-
     # =========================================================================
     # PARQUET EXPORT (Silver only - single source of truth)
     # =========================================================================

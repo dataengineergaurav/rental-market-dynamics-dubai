@@ -94,7 +94,7 @@ def medallion_pipeline(
             results["bronze"]["rent_contracts"] = bronze_rows
             
             # Export bronze layer to parquet for backup (optional, can be skipped in optimized design)
-            output_path = f"{db_path}_bronze.parquet"
+            output_path = f"bronze.parquet"
             store.export_to_parquet("bronze_rent_contracts", output_path)
             logger.info(f"Bronze layer complete: {bronze_rows:,} raw rows")
             
@@ -111,7 +111,7 @@ def medallion_pipeline(
             results["silver"]["rent_contracts"] = silver_rows
             
             # Export silver layer to parquet (single source of truth for cleaned data)
-            silver_parquet_path = f"{db_path}_silver.parquet"
+            silver_parquet_path = f"silver.parquet"
             store.export_to_parquet("silver_rent_contracts", silver_parquet_path)
             logger.info(f"Silver layer complete: {silver_rows:,} cleaned rows")
 
