@@ -470,10 +470,9 @@ class TestETLPipelineIntegration:
         self.property_usage_report = "test_property_usage.csv"
     
     @patch.dict(os.environ, {'DLD_URL': 'https://example.com/test'})
-
     @patch('run_etl_pipeline.RentContractsDownloader')
-    @patch('lib.transform.rent_contracts_transformer.RentContractsTransformer')
-    @patch('lib.classes.property_usage.PropertyUsage')
+    @patch('run_etl_pipeline.RentContractsTransformer')
+    @patch('run_etl_pipeline.PropertyUsage')
     @patch('run_etl_pipeline.GitHubRelease')
     def test_complete_pipeline_success(self, mock_github_class, mock_property_usage_class, 
                                      mock_transformer_class, mock_downloader_class):
@@ -537,7 +536,9 @@ class TestETLPipelineIntegration:
     
     @patch.dict(os.environ, {'GH_TOKEN': 'test_token'})
     @patch('run_etl_pipeline.GitHubRelease')
-    def test_publish_to_github_release_success(self, mock_github_class):
+    @patch('run_etl_pipeline.os.path.exists', return_value=True)
+    @patch('run_etl_pipeline.os.path.getsize', return_value=1024)
+    def test_publish_to_github_release_success(self, mock_getsize, mock_exists, mock_github_class):
         """Test successful GitHub publish function."""
         mock_publisher = Mock()
         mock_github_class.return_value = mock_publisher
