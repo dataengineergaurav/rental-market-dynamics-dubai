@@ -8,4 +8,3 @@ polars
 pytest
 jupyter
 requests-mock
-duckdb
