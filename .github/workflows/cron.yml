@@ -25,6 +25,4 @@ jobs:
           RENT_CONTRACTS: ${{ secrets.RENT_CONTRACTS }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          make build
-          python -c "from run_etl_pipeline import main; main(publish_to_github=True)"
-          make test
+          make all
