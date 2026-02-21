@@ -1,6 +1,6 @@
 # Rental Market Dynamics - Dubai
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/ggurjar333/rental-market-dynamics-dubai/build_and_deploy.yml?branch=dev)
+![Build Status](https://img.shields.io/github/actions/workflow/status/ggurjar333/rental-market-dynamics-dubai/build_and_deploy.yml?branch=main)
 ![License](https://img.shields.io/github/license/ggurjar333/rental-market-dynamics-dubai)
 ![Coverage](https://img.shields.io/codecov/c/github/ggurjar333/rental-market-dynamics-dubai)
 
