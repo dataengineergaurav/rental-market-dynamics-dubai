@@ -32,51 +32,11 @@ logger = get_logger("ETL")
 
 
 def _incremental_window(output_dir: Path) -> tuple[str, str]:
-    """Return (from_date, to_date) as MM/DD/YYYY for incremental fetch.
-
-    Looks for latest output/rents_*.csv|*.parquet|*.jsonl| output/rents.csv .
-    If found, from_date = max date (inclusive, -1d if latest==today), else last 2 days (avoids full 2020 backfill).
-    """
+    """Return (from_date, to_date) as MM/DD/YYYY for incremental fetch — single day (today only)."""
     today = datetime.now(timezone.utc).date()
     to_date = f"{today.month:02d}/{today.day:02d}/{today.year}"
-    # find latest dated file (support both rents_* and legacy rent_contracts_*)
-    candidates = (
-        glob.glob(str(output_dir / "rents_*.csv"))
-        + glob.glob(str(output_dir / "rents_*.parquet"))
-        + glob.glob(str(output_dir / "rents_*.jsonl"))
-        + glob.glob(str(output_dir / "rent_contracts_*.csv"))
-        + glob.glob(str(output_dir / "rent_contracts_*.parquet"))
-    )
-    latest: date | None = None
-    for p in candidates:
-        m = re.search(r"(?:rents|rent_contracts)_(\d{4}-\d{2}-\d{2}|\d{8})", p)
-        if not m:
-            continue
-        s = m.group(1)
-        try:
-            d = datetime.strptime(s, "%Y-%m-%d").date() if "-" in s else datetime.strptime(s, "%Y%m%d").date()
-            if latest is None or d > latest:
-                latest = d
-        except ValueError:
-            continue
-    # also consider bare rents.csv/jsonl mtime as fallback
-    for bare in [output_dir / "rents.csv", output_dir / "rents.jsonl", output_dir / "rents.parquet"]:
-        if bare.exists():
-            mtime = datetime.fromtimestamp(bare.stat().st_mtime, tz=timezone.utc).date()
-            if latest is None or mtime > latest:
-                latest = mtime
-    if latest:
-        # inclusive of latest date to catch late-registered contracts; clamp to today
-        frm = latest
-        # if latest is today and no data yet for today, expand to last 2 days to avoid 0-row window
-        if frm == today:
-            frm = today - timedelta(days=1)
-        if frm > today:
-            frm = today
-    else:
-        frm = today - timedelta(days=2)
-    from_date = f"{frm.month:02d}/{frm.day:02d}/{frm.year}"
-    logger.info(f"Incremental window: {from_date} -> {to_date} (latest file date: {latest})")
+    from_date = to_date  # only today
+    logger.info(f"Incremental window: {from_date} -> {to_date} (single-day)")
     return from_date, to_date
 
 
@@ -217,7 +177,7 @@ def main():
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    csv_filename = output_dir / f'rents_{date.today()}.csv'
+    csv_filename = output_dir / f'rent_contracts_{date_str}.csv'
     parquet_filename = str(output_dir / f'rent_contracts_{date_str}.parquet')
     property_usage_report = str(output_dir / f'property_usage_{date_str}.csv')
 
@@ -241,23 +201,28 @@ def main():
         except FileNotFoundError:
             pass
 
-        if not transform_rents(str(csv_filename), parquet_filename):
-            logger.error("Pipeline stopped at Transform phase.")
-            return False
+        # CSV-only incremental: keep parquet/report for local but publish CSV
+        transform_ok = transform_rents(str(csv_filename), parquet_filename)
+        if not transform_ok:
+            logger.warning("Transform failed, continuing with CSV-only publish")
 
-        if not analyze_property_usage(parquet_filename, property_usage_report):
-            logger.error("Pipeline stopped at Analysis phase.")
-            return False
+        # property usage best-effort (needs parquet)
+        try:
+            if transform_ok and Path(parquet_filename).exists():
+                analyze_property_usage(parquet_filename, property_usage_report)
+        except Exception as e:
+            logger.warning(f"Analyze skipped: {e}")
 
         if os.getenv("GH_TOKEN"):
-            publish_artifacts_to_github([parquet_filename, property_usage_report])
+            # publish CSV only (parquet not needed for incremental)
+            publish_artifacts_to_github([str(csv_filename)])
         else:
             logger.info("Skipping GitHub publication (GH_TOKEN not set)")
 
         logger.info("=" * 60)
         logger.info("ETL PIPELINE COMPLETED SUCCESSFULLY")
-        logger.info(f"  - Parquet: {parquet_filename}")
-        logger.info(f"  - Report:  {property_usage_report}")
+        logger.info(f"  - CSV: {csv_filename}")
+        logger.info(f"  - Parquet (local): {parquet_filename}")
         logger.info("=" * 60)
         return True
 
