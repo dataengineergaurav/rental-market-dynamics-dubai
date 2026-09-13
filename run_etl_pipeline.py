@@ -34,7 +34,7 @@ def _incremental_window(output_dir: Path) -> tuple[str, str]:
     """Return (from_date, to_date) as MM/DD/YYYY for incremental fetch.
 
     Looks for latest output/rents_*.csv|*.parquet|*.jsonl| output/rents.csv .
-    If found, from_date = max date +1 day, else last 7 days (avoids full 2020 backfill).
+    If found, from_date = max date (inclusive, -1d if latest==today), else last 2 days (avoids full 2020 backfill).
     """
     today = datetime.now(timezone.utc).date()
     to_date = f"{today.month:02d}/{today.day:02d}/{today.year}"
@@ -67,7 +67,7 @@ def _incremental_window(output_dir: Path) -> tuple[str, str]:
         if frm > today:
             frm = today
     else:
-        frm = today - timedelta(days=7)
+        frm = today - timedelta(days=2)
     from_date = f"{frm.month:02d}/{frm.day:02d}/{frm.year}"
     logger.info(f"Incremental window: {from_date} -> {to_date} (latest file date: {latest})")
     return from_date, to_date
@@ -94,7 +94,20 @@ def download_rents(url: str, filename: str, from_date: str | None = None, to_dat
 
         out = str(Path(filename).resolve())
         cmd = [sys.executable, "-m", "scrapy", "crawl", "rents", "-o", out, "-a", f"url={url}", "-a", f"from_date={from_date}", "-a", f"to_date={to_date}"]
-        result = subprocess.run(cmd, cwd="rents_scraper", capture_output=True, text=True, timeout=600)
+        try:
+            result = subprocess.run(cmd, cwd="rents_scraper", capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired as e:
+            logger.warning(f"Spider timed out after 900s for {from_date}->{to_date}: {e} — falling back to direct downloader")
+            from lib.extract.ejari_rents_downloader import EjariRentsDownloader
+
+            if EjariRentsDownloader(url).run(filename, from_date=from_date, to_date=to_date):
+                logger.info(f"Download complete: {filename} (direct after timeout, {from_date}->{to_date})")
+                return True
+            # no new rows is not fatal for incremental
+            if os.path.isfile(filename):
+                return True
+            Path(filename).touch()
+            return True
         if result.returncode == 0 and os.path.isfile(filename) and os.path.getsize(filename) > 0:
             # spider writes header even if 0 rows; check data rows >1
             try:
