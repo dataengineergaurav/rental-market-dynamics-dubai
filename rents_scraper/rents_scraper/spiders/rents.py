@@ -17,7 +17,8 @@ class RentsSpider(scrapy.Spider):
       scrapy crawl rents -a from_date=09/10/2026 -a to_date=09/13/2026 -a date_type=0 -O /tmp/rents.csv
     """
     name = "rents"
-    allowed_domains = ["gateway.dubailand.gov.ae"]
+    # ponytail: allowed_domains derived from EJARI_URL at runtime; hardcoding leaks data source
+    allowed_domains = []
     custom_settings = {"FEED_EXPORT_ENCODING": "utf-8", "CONCURRENT_REQUESTS_PER_DOMAIN": 1}
 
     def __init__(self, from_date="01/01/2020", to_date=None, date_type="0", take="1000", url=None, *args, **kwargs):
