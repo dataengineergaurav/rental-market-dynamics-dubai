@@ -39,11 +39,17 @@ def _incremental_window(output_dir: Path) -> tuple[str, str]:
     """
     today = datetime.now(timezone.utc).date()
     to_date = f"{today.month:02d}/{today.day:02d}/{today.year}"
-    # find latest dated file
-    candidates = glob.glob(str(output_dir / "rents_*.csv")) + glob.glob(str(output_dir / "rents_*.parquet")) + glob.glob(str(output_dir / "rents_*.jsonl"))
+    # find latest dated file (support both rents_* and legacy rent_contracts_*)
+    candidates = (
+        glob.glob(str(output_dir / "rents_*.csv"))
+        + glob.glob(str(output_dir / "rents_*.parquet"))
+        + glob.glob(str(output_dir / "rents_*.jsonl"))
+        + glob.glob(str(output_dir / "rent_contracts_*.csv"))
+        + glob.glob(str(output_dir / "rent_contracts_*.parquet"))
+    )
     latest: date | None = None
     for p in candidates:
-        m = re.search(r"rents_(\d{4}-\d{2}-\d{2}|\d{8})", p)
+        m = re.search(r"(?:rents|rent_contracts)_(\d{4}-\d{2}-\d{2}|\d{8})", p)
         if not m:
             continue
         s = m.group(1)
@@ -212,7 +218,7 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     csv_filename = output_dir / f'rents_{date.today()}.csv'
-    parquet_filename = str(output_dir / f'rents_{date_str}.parquet')
+    parquet_filename = str(output_dir / f'rent_contracts_{date_str}.parquet')
     property_usage_report = str(output_dir / f'property_usage_{date_str}.csv')
 
     try:
