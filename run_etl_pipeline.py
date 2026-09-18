@@ -118,6 +118,22 @@ def transform_rents(input_csv: str, output_parquet: str) -> bool:
     try:
         if RentsTransformer(input_csv, output_parquet).transform():
             logger.info(f"Transformation complete: {output_parquet}")
+            # P0.3 fail-open validation gate (logs, never blocks)
+            try:
+                import polars as pl
+                from lib.classes.validators import validate_rent_contracts
+                df = pl.read_parquet(output_parquet)
+                # null unusable area <200 for PSF safety (enrichment also does this)
+                if "actual_area" in df.columns:
+                    tiny = df.filter(pl.col("actual_area") < 200).height
+                    if tiny:
+                        logger.warning(f"Validation: {tiny} rows with actual_area <200 will have null PSF")
+                result = validate_rent_contracts(df, strict=False)
+                logger.info(f"Validation gate: {result.get_summary()} | {result}")
+                if result.errors:
+                    logger.warning(f"Validation errors (fail-open): {result.errors[:3]}")
+            except Exception as ve:
+                logger.warning(f"Validation gate skipped: {ve}")
             return True
         logger.error("Transformation failed.")
         return False

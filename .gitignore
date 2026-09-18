@@ -7,7 +7,19 @@ __pycache__/
 build
 **.csv
 **.DS_Store
+**.duckdb
 **.egg-info/
+**.jsonl
 **.log
 **.parquet
 **.lock
+output/rental_analytics_*.duckdb
+output/rents_silver_*.parquet
+# local agent bundle & internal docs — not public
+SKILL.md
+docs/EXPERT_REVIEW_AND_ROADMAP.md
+docs/IMPLEMENTATION_PLAN.md
+docs/architecture.gif
+docs/architecture.html
+.claude/
+.opencode/

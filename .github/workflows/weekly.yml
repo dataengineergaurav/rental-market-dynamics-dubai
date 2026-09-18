@@ -1,0 +1,79 @@
+name: Weekly — Build DuckDB (Mon-Sun pooled)
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays 06:00 UTC — after Sunday week closes, before daily cron
+  workflow_dispatch:
+    inputs:
+      week:
+        description: 'ISO week like 2026W37 (default: previous week)'
+        required: false
+        type: string
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    env:
+      ACTIONS_RUNNER_DEBUG: true
+      ACTIONS_STEP_DEBUG: true
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install deps
+        run: pip install -q -r requirements.txt && pip install -q lib/ && pip install -q duckdb pyarrow
+
+      - name: Rehydrate daily CSVs from Releases (last 7d)
+        run: |
+          for d in 0 1 2 3 4 5 6; do
+            day=$(date -d "$d days ago" +%Y%m%d)
+            tag="release-$(date -d "$d days ago" +%Y-%m-%d)"
+            gh release download "$tag" --repo dataengineergaurav/rental-market-dynamics-dubai --pattern "rent_contracts_*.csv" --dir output --clobber || echo "no asset for $tag"
+          done
+          ls -lh output/rent_contracts_*.csv || true
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Build weekly DuckDB (Mon-Sun)
+        run: |
+          WEEK="${{ inputs.week }}"
+          if [ -z "$WEEK" ]; then WEEK=$(date -d "7 days ago" +%GW%V); fi
+          echo "WEEK=$WEEK" >> $GITHUB_ENV
+          # prefer ISO week; fallback to explicit from/to for partial weeks
+          uv run python -m lib.analysis.build_weekly_duckdb --week "$WEEK" || \
+            uv run python -m lib.analysis.build_weekly_duckdb --from $(date -d "7 days ago" +%Y%m%d) --to $(date -d "1 day ago" +%Y%m%d)
+          ls -lh output/*.duckdb
+          uv run python - << 'PY'
+          import duckdb
+          f=f"output/rental_analytics_weekly_{'${{ env.WEEK }}'}.duckdb"
+          # fallback if week label differed — pick newest
+          import pathlib
+          if not pathlib.Path(f).exists():
+              import glob
+              cand=sorted(glob.glob("output/rental_analytics_weekly_*.duckdb"))
+              f=cand[-1] if cand else f
+          con=duckdb.connect(f)
+          print(con.execute("SELECT * FROM _meta").fetchall())
+          print(con.execute("SELECT count(*) FROM fact_rental_contract").fetchall())
+          print(con.execute("SELECT area_name_en, n, median_rent FROM gold_area_median LIMIT 3").fetchall())
+          PY
+
+      - name: Publish to weekly Release
+        run: |
+          WEEK=$(cat $GITHUB_ENV 2>/dev/null | grep WEEK= | cut -d= -f2)
+          [ -n "$WEEK" ] || WEEK=$(date -d "7 days ago" +%GW%V)
+          FILE=$(ls -1 output/rental_analytics_weekly_*.duckdb | tail -1)
+          gh release view "release-week-$WEEK" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || gh release create "release-week-$WEEK" --repo dataengineergaurav/rental-market-dynamics-dubai --title "Weekly $WEEK" --notes "Weekly DuckDB $WEEK — 7d pooled enriched fact + gold views (fact_rental_contract, gold_area_median, gold_standard_lease)" --latest=false
+          gh release upload "release-week-$WEEK" "$FILE" --repo dataengineergaurav/rental-market-dynamics-dubai --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Run tests
+        run: uv run pytest -q

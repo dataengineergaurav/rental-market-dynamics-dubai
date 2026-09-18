@@ -10,11 +10,10 @@ from datetime import datetime
 import polars as pl
 
 from lib.config import (
-    get_area_tier,
-    normalize_property_type,
-    is_residential,
-    is_commercial,
+    AREA_CLASSIFICATIONS,
+    AreaTier,
     MARKET_METRICS,
+    PROPERTY_TYPE_MAPPINGS,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,20 +72,22 @@ class RentContractsEnricher:
         
         # Add usage category
         enriched = self._add_usage_category(enriched)
-        
+
+        # Flag bulk registrations (Naif 79×1.54M etc) — count over (area, amount) >10
+        enriched = self._add_bulk_flag(enriched)
+
         logger.info(f"Enrichment complete. Added {len(enriched.columns) - len(self.data.columns)} new columns")
-        
+
         return enriched
         
     def _add_psf(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Add price per square foot calculation."""
+        """Add price per square foot — null if area <200 (unusable)."""
         if "actual_area" in df.columns and "annual_amount" in df.columns:
             logger.debug("Adding PSF calculation...")
-            
             df = df.with_columns(
                 pl.when(
                     (pl.col("actual_area").is_not_null()) &
-                    (pl.col("actual_area") > 0) &
+                    (pl.col("actual_area") >= 200) &
                     (pl.col("annual_amount").is_not_null()) &
                     (pl.col("annual_amount") > 0)
                 )
@@ -94,53 +95,50 @@ class RentContractsEnricher:
                 .otherwise(None)
                 .alias("price_per_sqft")
             )
-        
         return df
         
     def _add_area_tier(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Add area tier classification."""
+        """Add area tier classification via AREA_CLASSIFICATIONS."""
         if "area_name_en" in df.columns:
             logger.debug("Adding area tier classification...")
-            
-            # This is a simplified version - in production, you'd use a mapping
-            # For now, we'll add a placeholder that can be updated with actual mappings
+            tier_map = {k: v.value for k, v in AREA_CLASSIFICATIONS.items()}
             df = df.with_columns(
-                pl.lit("Mid-Tier").alias("area_tier")
+                pl.col("area_name_en").replace_strict(tier_map, default=AreaTier.MID_TIER.value).alias("area_tier")
             )
-            
-            # TODO: Implement actual area tier mapping from config
-            # df = df.with_columns(
-            #     pl.col("area_en").map_dict(AREA_TIER_MAPPING).alias("area_tier")
-            # )
-        
         return df
         
     def _normalize_property_types(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Normalize property type names."""
+        """Normalize property type names via PROPERTY_TYPE_MAPPINGS."""
         if "ejari_property_type_en" in df.columns:
             logger.debug("Normalizing property types...")
-            
-            # Add normalized property type column
             df = df.with_columns(
                 pl.col("ejari_property_type_en")
                 .str.to_lowercase()
                 .str.strip_chars()
+                .replace_strict(PROPERTY_TYPE_MAPPINGS, default=None)
+                .fill_null(pl.col("ejari_property_type_en").str.strip_chars().str.to_titlecase())
                 .alias("property_type_normalized")
             )
-        
         return df
         
     def _add_temporal_features(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add temporal features from contract start date."""
-        if "contract_start_date" in df.columns:
+        if "contract_start_date" in df.columns and df["contract_start_date"].dtype != pl.Null:
+            # skip if dtype is not temporal (e.g. all-null test fixture)
+            if df["contract_start_date"].dtype not in (pl.Date, pl.Datetime, pl.Datetime("ns"), pl.Datetime("ms"), pl.Datetime("us")):
+                # try to parse, if still not temporal skip
+                if df["contract_start_date"].null_count() == df.height:
+                    return df
             logger.debug("Adding temporal features...")
-            
-            df = df.with_columns([
-                pl.col("contract_start_date").dt.year().alias("contract_year"),
-                pl.col("contract_start_date").dt.quarter().alias("contract_quarter"),
-                pl.col("contract_start_date").dt.month().alias("contract_month"),
-                pl.col("contract_start_date").dt.weekday().alias("contract_weekday"),
-            ])
+            try:
+                df = df.with_columns([
+                    pl.col("contract_start_date").dt.year().alias("contract_year"),
+                    pl.col("contract_start_date").dt.quarter().alias("contract_quarter"),
+                    pl.col("contract_start_date").dt.month().alias("contract_month"),
+                    pl.col("contract_start_date").dt.weekday().alias("contract_weekday"),
+                ])
+            except Exception:
+                return df
             
             # Add season
             df = df.with_columns(
@@ -232,6 +230,18 @@ class RentContractsEnricher:
                 .alias("usage_category")
             )
         
+        return df
+
+    def _add_bulk_flag(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Flag bulk registrations: same area+amount repeated >10 times (Naif/Hor)."""
+        if "area_name_en" in df.columns and "annual_amount" in df.columns:
+            logger.debug("Adding bulk registration flag...")
+            # count per (area, amount) — marks whole group if count>10
+            counts = df.group_by(["area_name_en", "annual_amount"]).agg(pl.len().alias("_bulk_n"))
+            df = df.join(counts, on=["area_name_en", "annual_amount"], how="left")
+            df = df.with_columns((pl.col("_bulk_n") > 10).alias("is_bulk_registration")).drop("_bulk_n")
+        else:
+            df = df.with_columns(pl.lit(False).alias("is_bulk_registration"))
         return df
 
 

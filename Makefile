@@ -44,6 +44,17 @@ etl:
 	@echo "Running Ejari rents ETL process..."
 	python run_etl_pipeline.py
 
+# Weekly: 7-day Mon-Sun pooled DuckDB from Releases daily CSVs
+weekly:
+	@echo "Building weekly DuckDB (Mon-Sun pooled, 7d)..."
+	uv run python -m lib.analysis.build_weekly_duckdb --from 20260915 --to 20260921 || uv run python -m lib.analysis.build_weekly_duckdb --from 20260913 --to 20260919
+
+weekly-publish: weekly
+	@echo "Publishing weekly DuckDB to GitHub Release (weekly tag)..."
+	@test -n "$(WEEK)" || (echo "Usage: make weekly-publish WEEK=2026W37" && exit 1)
+	gh release view release-week-$(WEEK) --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || gh release create release-week-$(WEEK) --repo dataengineergaurav/rental-market-dynamics-dubai --title "Weekly $(WEEK)" --notes "Weekly DuckDB $(WEEK) — 7d pooled enriched fact + gold views" --latest=false
+	gh release upload release-week-$(WEEK) output/rental_analytics_weekly_$(WEEK).duckdb --repo dataengineergaurav/rental-market-dynamics-dubai --clobber
+
 # Scrapy rents (paginated, slow ~10s/page) — must run inside rents_scraper/
 scrapy-rents:
 	@echo "Scraping rents via Scrapy (Ejari, slow ~10s/page)..."

@@ -11,11 +11,10 @@ from datetime import date, datetime
 import polars as pl
 
 from lib.config import (
+    COMMERCIAL_USAGE,
     MARKET_METRICS,
+    RESIDENTIAL_USAGE,
     VALIDATION_THRESHOLDS,
-    is_residential,
-    is_commercial,
-    get_area_tier,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,10 +67,10 @@ class MarketAnalytics:
             logger.info("PSF metrics require property size data which is not available in current schema.")
             return pl.DataFrame()
         
-        # Filter records with valid area and rent
+        # Filter records with valid area and rent (area <200 is unusable per P0 gate)
         valid_data = self.data.filter(
             (pl.col("actual_area").is_not_null()) &
-            (pl.col("actual_area") > 0) &
+            (pl.col("actual_area") >= 200) &
             (pl.col("annual_amount").is_not_null()) &
             (pl.col("annual_amount") > 0)
         )
@@ -92,11 +91,11 @@ class MarketAnalytics:
         max_psf_com = VALIDATION_THRESHOLDS["max_psf_commercial"]
         
         psf_data = psf_data.filter(
-            ((is_residential(pl.col("property_usage_en"))) & 
-             (pl.col("psf") >= min_psf_res) & 
+            ((pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)) &
+             (pl.col("psf") >= min_psf_res) &
              (pl.col("psf") <= max_psf_res)) |
-            ((is_commercial(pl.col("property_usage_en"))) & 
-             (pl.col("psf") >= min_psf_com) & 
+            ((pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)) &
+             (pl.col("psf") >= min_psf_com) &
              (pl.col("psf") <= max_psf_com))
         )
         

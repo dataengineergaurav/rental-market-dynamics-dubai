@@ -43,7 +43,11 @@ class PropertyUsage:
         
         try:
             lf = pl.scan_parquet(input_file)
-            
+            # P0 guard: if is_bulk_registration exists (enriched), exclude bulk
+            schema = lf.collect_schema().names()
+            if "is_bulk_registration" in schema:
+                lf = lf.filter(pl.col("is_bulk_registration") == False)  # noqa: E712
+
             # Basic property usage statistics
             property_usage_stats = lf.filter(
                 (pl.col("property_usage_en").is_not_null()) &
