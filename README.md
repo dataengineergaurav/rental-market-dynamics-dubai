@@ -50,23 +50,25 @@ Ejari rent transactions only — sourced from the configured `EJARI_URL` endpoin
 ```bash
 .
 ├── lib
-│   ├── extract
-│   │   └── ejari_rents_downloader.py   # POST EJARI_URL
-│   ├── transform
-│   │   └── rents_transformer.py        # rents CSV -> Parquet
-│   ├── classes
-│   ├── workspace
-│   ├── config.py                       # rents config (EJARI_URL)
+│   ├── extract/ejari_rents_downloader.py  # POST EJARI_URL (P_TAKE/P_SKIP pagination)
+│   ├── transform/rents_transformer.py      # rents CSV -> Parquet (canonical aliases)
+│   ├── transform/enrichment.py             # enrich_rent_contracts (PSF, tiers, luxury)
+│   ├── classes/validators.py               # RentContractValidator / validate_rent_contracts
+│   ├── classes/market_analytics.py         # MarketAnalytics (PSF, trends, segmentation)
+│   ├── classes/property_usage.py           # PropertyUsage (usage mix report)
+│   ├── workspace/github_client.py          # GitHubRelease (dated tag, reuse same-day)
+│   ├── analysis/*.sql                      # star-schema DDL (dim_*, fact_rental_contract)
+│   ├── config.py                           # EJARI_URL, thresholds, tier mappings
 │   └── logging_helpers.py
-├── rents_scraper
-│   └── rents_scraper/spiders/rents.py  # Scrapy rents spider
-├── output                              # rents_*.csv, rents_*.parquet
-├── tests
-├── run_etl_pipeline.py                 # EJARI_URL pipeline
+├── rents_scraper/rents_scraper/spiders/rents.py  # Scrapy rents spider (same EJARI_URL)
+├── output                                  # rent_contracts_YYYYMMDD.csv/.parquet, property_usage_*.csv
+├── tests/test_etl_pipeline.py
+├── run_etl_pipeline.py                     # incremental pipeline (yesterday->today)
+├── docs/architecture.html                  # bronze/silver/gold diagram
+├── docs/LIBRARY_USAGE_GUIDE.md
 ├── .env.example
 ├── Makefile
-├── README.md
-└── requirements.txt
+└── requirements.txt / pyproject.toml
 ```
 
 ## Getting Started
@@ -106,7 +108,7 @@ Ejari rent transactions only — sourced from the configured `EJARI_URL` endpoin
 
 
 ## Historical Data
-   Download the historical data from [releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases
+   Download the historical data from [releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases)
 
 ## Contributing
 Contributions are welcome! Please review the [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

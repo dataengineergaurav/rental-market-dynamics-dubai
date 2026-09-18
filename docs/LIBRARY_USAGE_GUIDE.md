@@ -146,46 +146,42 @@ analyzer.compare_periods(
 )
 ```
 
-## Enhanced ETL Pipeline
+## ETL Pipeline (`run_etl_pipeline.py`)
 
-The existing modules have been enhanced with better error handling and validation:
+Incremental rents pipeline: `download_rents()` (Scrapy spider with direct `EjariRentsDownloader` fallback) → `transform_rents()` → `analyze_property_usage()` → `publish_artifacts_to_github()`. Skips download if file exists, treats 0-row windows as success.
 
-### Enhanced Downloader
+Core modules:
 
-```python
-from lib.extract.rent_contracts_downloader import RentContractsDownloader
-
-downloader = RentContractsDownloader(url)
-success = downloader.run(filename)  # Now returns bool
-
-# Features:
-# - Retry logic with exponential backoff
-# - Progress tracking for large files
-# - Comprehensive error handling
-# - Configurable timeouts
-```
-
-### Enhanced Transformer
+### Rents Downloader (`lib/extract/ejari_rents_downloader.py`)
 
 ```python
-from lib.transform.rent_contracts_transformer import RentContractsTransformer
+from lib.extract.ejari_rents_downloader import EjariRentsDownloader
 
-transformer = RentContractsTransformer(
-    input_file="input.csv",
-    output_file="output.parquet",
-    validate=True  # Enable data validation
-)
-
-success = transformer.transform()  # Now returns bool
+downloader = EjariRentsDownloader(url)  # url or EJARI_URL env
+success: bool = downloader.run(filename, from_date="09/12/2026", to_date="09/13/2026")
 
 # Features:
-# - Integrated data validation
-# - Transformation statistics logging
-# - Better error handling
-# - Schema enforcement
+# - Paginated POST with P_TAKE/P_SKIP, retry with exponential backoff
+# - Writes CSV (default) or JSON if filename endswith .json
+# - Configurable timeout via API_CONFIG
 ```
 
-## Complete Example: Enhanced ETL with Analytics
+### Rents Transformer (`lib/transform/rents_transformer.py`)
+
+```python
+from lib.transform.rents_transformer import RentsTransformer
+
+transformer = RentsTransformer(input_file="input.csv", output_file="output.parquet")
+success: bool = transformer.transform()
+
+# Features:
+# - scan_csv (utf8-lossy) with schema_overrides for ANNUAL_AMOUNT/ACTUAL_AREA
+# - Parses REGISTRATION_DATE/START_DATE/END_DATE to datetime
+# - Adds canonical lowercase aliases (annual_amount, actual_area, area_name_en, ...)
+# - sink_parquet with zstd (see FILE_CONFIG)
+```
+
+## Complete Example: ETL with Analytics (rents only)
 
 ```python
 import os
@@ -193,8 +189,8 @@ import polars as pl
 from datetime import date
 from dotenv import load_dotenv
 
-from lib.extract.rent_contracts_downloader import RentContractsDownloader
-from lib.transform.rent_contracts_transformer import RentContractsTransformer
+from lib.extract.ejari_rents_downloader import EjariRentsDownloader
+from lib.transform.rents_transformer import RentsTransformer
 from lib.transform.enrichment import enrich_rent_contracts
 from lib.classes.property_usage import PropertyUsage
 from lib.classes.market_analytics import MarketAnalytics
@@ -207,19 +203,19 @@ logger = get_logger("ETL")
 
 load_dotenv()
 
-# Step 1: Download
-url = os.getenv("DLD_URL")
-csv_file = f"output/rent_contracts_{date.today()}.csv"
+# Step 1: Download (rents only, incremental window)
+url = os.getenv("EJARI_URL")
+csv_file = f"output/rent_contracts_{date.today():%Y%m%d}.csv"
 
-downloader = RentContractsDownloader(url)
-if not downloader.run(csv_file):
+downloader = EjariRentsDownloader(url)
+if not downloader.run(csv_file, from_date="09/12/2026", to_date="09/13/2026"):
     logger.error("Download failed")
     exit(1)
 
-# Step 2: Transform with validation
-parquet_file = f"rent_contracts_{date.today()}.parquet"
+# Step 2: Transform
+parquet_file = f"output/rent_contracts_{date.today():%Y%m%d}.parquet"
 
-transformer = RentContractsTransformer(csv_file, parquet_file, validate=True)
+transformer = RentsTransformer(csv_file, parquet_file)
 if not transformer.transform():
     logger.error("Transformation failed")
     exit(1)
@@ -227,11 +223,11 @@ if not transformer.transform():
 # Step 3: Enrich data
 df = pl.read_parquet(parquet_file)
 enriched_df = enrich_rent_contracts(df)
-enriched_file = f"rent_contracts_enriched_{date.today()}.parquet"
+enriched_file = f"output/rent_contracts_enriched_{date.today():%Y%m%d}.parquet"
 enriched_df.write_parquet(enriched_file)
 
 # Step 4: Generate property usage report
-property_usage = PropertyUsage(f"property_usage_report_{date.today()}.csv")
+property_usage = PropertyUsage(f"output/property_usage_{date.today():%Y%m%d}.csv")
 property_usage.transform(enriched_file)
 
 # Step 5: Run market analytics
@@ -239,21 +235,22 @@ analytics = MarketAnalytics(enriched_df)
 
 # Generate various reports
 area_stats = analytics.analyze_by_area()
-area_stats.write_csv(f"area_analysis_{date.today()}.csv")
+area_stats.write_csv(f"output/area_analysis_{date.today():%Y%m%d}.csv")
 
 top_areas = analytics.identify_high_demand_areas(top_n=20)
-top_areas.write_csv(f"top_areas_{date.today()}.csv")
+top_areas.write_csv(f"output/top_areas_{date.today():%Y%m%d}.csv")
 
 type_stats = analytics.analyze_by_property_type()
-type_stats.write_csv(f"property_type_analysis_{date.today()}.csv")
+type_stats.write_csv(f"output/property_type_analysis_{date.today():%Y%m%d}.csv")
 
 monthly_trends = analytics.calculate_rental_trends(period="monthly")
-monthly_trends.write_csv(f"monthly_trends_{date.today()}.csv")
+monthly_trends.write_csv(f"output/monthly_trends_{date.today():%Y%m%d}.csv")
 
 market_summary = analytics.generate_market_summary()
 logger.info(f"Market Summary: {market_summary}")
 
 logger.info("ETL pipeline with analytics completed successfully!")
+# Note: run_etl_pipeline.py is the canonical incremental pipeline (Scrapy -> direct fallback)
 ```
 
 ## Configuration
@@ -261,7 +258,7 @@ logger.info("ETL pipeline with analytics completed successfully!")
 ### Environment Variables
 
 ```bash
-# .env file
+# .env file (see .env.example)
 EJARI_URL=your_ejari_endpoint_here
 GH_TOKEN=your_github_token
 ```
