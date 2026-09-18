@@ -1,143 +1,97 @@
-# Rental Market Dynamics - Dubai
+# Rental Market Dynamics — Dubai
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/ggurjar333/rental-market-dynamics-dubai/build_and_deploy.yml?branch=main)
 ![License](https://img.shields.io/github/license/ggurjar333/rental-market-dynamics-dubai)
-![Coverage](https://img.shields.io/codecov/c/github/ggurjar333/rental-market-dynamics-dubai)
 
-Ejari rent transactions only — sourced from the configured `EJARI_URL` endpoint
-(Rent Transaction Details). No sales, no carea, no legacy Pulse code.
+ETL and analytics pipeline for **Dubai Ejari rent transactions** — registered tenancy contracts from the configured Rent Transaction Details endpoint.
 
-**Medians, not means.** Bulk registrations (Naif `79×1.54M` Hotels, Hor `663k` dupes) and `1 sqft` area shells are flagged and excluded (`is_bulk_registration`, `actual_area≥200` → `null PSF`).
+Sales, title deeds, and short-term stay data are out of scope. Analysis favors **medians over means**, with guards for bulk registrations and unrealistic unit areas so headline rent figures stay trustworthy.
 
-## Features
+## What it does
 
-- **Automated Data Extraction:** Paginated gateway rents fetch (`EjariRentsDownloader`) with Scrapy `rents` spider fallback — same `EJARI_URL` (`P_TAKE/P_SKIP`, retry+backoff, 900s timeout).
-- **Data Transformation:** Rents CSV → Parquet with canonical aliases (`RentsTransformer` `scan_csv` → `sink_parquet zstd`).
-- **Enrichment (P0-hardened):** `enrich_rent_contracts` — PSF `null<200`, `area_tier` via `AREA_CLASSIFICATIONS` (`replace_strict`), property-type normalize via `PROPERTY_TYPE_MAPPINGS`, bulk flag `>10` same `area+amount`, duration, luxury, usage category.
-- **Validation Gate (fail-open):** `validate_rent_contracts` in `transform_rents` — logs `errors/warnings` but never blocks release; PSF sanity `45-150` not `4691`.
-- **Weekly Analytics DB:** `rental_analytics_weekly_YYYYWxx.duckdb` — 7-day Mon-Sun pooled enriched fact + gold views `gold_area_median` (`n≥10`) + `gold_standard_lease` (`Flat 6-12m`).
-- **Property Usage & Market Analytics:** `PropertyUsage` (usage mix, medians, bulk-excluded) + `MarketAnalytics` (PSF `20-500/30-800`, `is_in` gated).
-- **Automated Releases:** Daily `rent_contracts_YYYYMMDD.csv` (`release-YYYY-MM-DD`) + weekly DuckDB (`release-week-YYYYWxx`) via `GitHubRelease` (reuse same-day tag).
-- **CI/CD:** Daily `05:30 UTC` ETL + weekly Mondays `06:00 UTC` DuckDB + `push` build.
+| Cadence | Output |
+|---------|--------|
+| **Daily** | Incremental extract → transform/enrich → optional GitHub Release CSV |
+| **Weekly** | Pool recent daily CSVs into a DuckDB analytics database with gold summary views |
 
-## Prerequisites
+The pipeline treats data in a simple bronze → silver → gold flow under `output/`: raw daily contracts, enriched Parquet, then weekly fact tables and area-level median views.
 
-- **Python:** 3.9 or higher (CI 3.12)
-- **Make:** To execute build commands
-- **uv** (or pip) — `pyproject.toml` includes `polars`, `duckdb`, `pyarrow`, `scrapy`
+## Architecture
 
-## Installation
-
-1. **Clone the repository:**
-    ```bash
-    git clone https://github.com/ggurjar333/rental-market-dynamics-dubai
-    cd rental-market-dynamics-dubai
-    ```
-
-2. **Install dependencies**
-    ```bash
-    uv sync
-    # or: pip install -r requirements.txt && pip install lib/
-    ```
-
-3. **Create a `.env` file**
-
-    Copy the provided example and update the values:
-    ```bash
-    cp .env.example .env
-    ```
-    `.env` needs only:
-    ```bash
-    EJARI_URL=your_ejari_endpoint_here
-    GH_TOKEN=your_github_token  # for releases
-    ```
-
-## Folder Structure
-```bash
-.
-├── lib
-│   ├── extract/ejari_rents_downloader.py  # POST EJARI_URL (P_TAKE/P_SKIP pagination)
-│   ├── transform/rents_transformer.py      # rents CSV -> Parquet (canonical aliases)
-│   ├── transform/enrichment.py             # enrich_rent_contracts (PSF null<200, tiers replace_strict, bulk flag >10)
-│   ├── classes/validators.py               # RentContractValidator / validate_rent_contracts
-│   ├── classes/market_analytics.py         # MarketAnalytics (PSF is_in gated, trends)
-│   ├── classes/property_usage.py           # PropertyUsage (usage mix, bulk-excluded)
-│   ├── analysis/build_weekly_duckdb.py     # weekly Mon-Sun DuckDB (fact + gold views)
-│   ├── analysis/*.sql                      # star-schema DDL (dim_*, fact_rental_contract) — deferred to N≥30
-│   ├── workspace/github_client.py          # GitHubRelease (dated tag, reuse same-day)
-│   ├── config.py                           # thresholds, tier mappings, API_CONFIG
-│   └── logging_helpers.py
-├── rents_scraper/rents_scraper/spiders/rents.py  # Scrapy rents spider (same EJARI_URL)
-├── output                                  # rent_contracts_YYYYMMDD.csv, rents_silver_pooled.parquet, rental_analytics_weekly_*.duckdb, area_median_index_*.csv
-├── tests/test_etl_pipeline.py + test_p0_gates.py
-├── run_etl_pipeline.py                     # incremental pipeline (yesterday->today, fail-open validation)
-├── SKILL.md                                # bundle: Dubai expert (hard mode) + Data Eng + Arch + QA + Ops + Orchestrator
-├── docs/EXPERT_REVIEW_AND_ROADMAP.md       # P0->P3 gates, 5-day pooled plan
-├── docs/IMPLEMENTATION_PLAN.md             # SA WBS + ADRs
-├── docs/LIBRARY_USAGE_GUIDE.md
-├── .github/workflows/cron.yml              # daily 05:30 UTC make all
-├── .github/workflows/weekly.yml            # weekly Mondays 06:00 UTC build DuckDB
-├── .env.example
-├── Makefile
-└── pyproject.toml
+```
+EJARI_URL (paginated)
+        │
+        ▼
+   Extract (Scrapy / downloader)
+        │
+        ▼
+   Transform + enrich (Polars)
+        │
+        ├──► daily CSV release
+        │
+        ▼
+   Weekly pool → DuckDB (fact + gold views)
 ```
 
-## Getting Started
-- **ETL Pipeline (daily incremental):**
-    ```bash
-    make all   # build → etl → test → publish rent_contracts_YYYYMMDD.csv
-    ```
-- **Weekly DuckDB (Mon-Sun pooled from Releases):**
-    ```bash
-    make weekly                    # builds output/rental_analytics_weekly_2026W37.duckdb (5d fallback if 7d thin)
-    make weekly-publish WEEK=2026W37  # → release-week-2026W37 asset
-    # or manual: uv run python -m lib.analysis.build_weekly_duckdb --week 2026W37
-    #            uv run python -m lib.analysis.build_weekly_duckdb --from 20260913 --to 20260919
-    ```
-- **Testing:**
-    ```bash
-    make test   # pytest — includes P0 gates: tier mapping, PSF null<200, p95<300, is_bulk
-    ```
+Orchestration is Make-driven locally and via GitHub Actions (daily ETL, weekly DuckDB build, push builds).
 
-## Usage Examples
-- **Downloading & Transforming Data (daily):**
-    ```bash
-    make etl
-    # or
-    python run_etl_pipeline.py
-    # logs: etl.log — DOWNLOAD→TRANSFORM (validation gate)→ANALYZE→PUBLISH
-    ```
+## Stack
 
-- **Scrapy rents spider:**
-    ```bash
-    make scrapy-rents
-    # or
-    cd rents_scraper && uv run scrapy crawl rents -a from_date=09/12/2026 -a to_date=09/13/2026 -O ../output/rents.jsonl
-    ```
+- **Python** 3.9+ (CI uses 3.12)
+- **Polars** / **PyArrow** for transform
+- **DuckDB** for weekly analytics
+- **Scrapy** for Ejari extraction
+- **uv** (or pip) for dependencies
+- Optional **dbt-duckdb** scaffold under `analysis/`
 
-- **Weekly analytics DB:**
-    ```bash
-    uv run python -m lib.analysis.build_weekly_duckdb --from 20260913 --to 20260919
-    duckdb output/rental_analytics_weekly_2026W37.duckdb "SELECT * FROM gold_area_median LIMIT 5;"
-    # fact_rental_contract: 16075 rows pooled (13-17 Sep), 121 areas n≥10
-    # gold_area_median ex Hotel/Labor Doom/Virtual+bulk: Barsha South Fourth 399 med 66k, Burj Khalifa 238 172k, Business Bay 353 116k
-    # gold_standard_lease Flat 6-12m 7713 med 64k
-    ```
+## Setup
 
-- **Publishing Releases:**
-    Daily `rent_contracts_YYYYMMDD.csv` → `release-YYYY-MM-DD`; weekly DuckDB → `release-week-YYYYWxx` (reuse same-day tag, `GH_TOKEN` only).
+```bash
+git clone https://github.com/ggurjar333/rental-market-dynamics-dubai
+cd rental-market-dynamics-dubai
+uv sync   # or: pip install -r requirements.txt && pip install lib/
+cp .env.example .env
+```
 
-## Historical Data
-Download daily CSVs and weekly DuckDBs from [releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases) (`release-YYYY-MM-DD` and `release-week-YYYYWxx`).
+Required environment variables:
+
+- `EJARI_URL` — Ejari rent transactions endpoint
+- `GH_TOKEN` — GitHub token (for publishing releases)
+
+## Common commands
+
+```bash
+make all              # build → daily ETL → tests
+make weekly           # build weekly DuckDB
+make test             # pytest
+make scrapy-rents     # Scrapy extract only
+```
+
+Daily entry point: `run_etl_pipeline.py`. Weekly analytics: `python -m lib.analysis.build_weekly_duckdb`.
+
+## Layout
+
+```
+lib/              Extract, transform, enrichment, analytics, release helpers
+rents_scraper/    Scrapy spider for Ejari rents
+analysis/         Optional dbt-duckdb starter project
+output/           Daily CSVs, Parquet, weekly DuckDB artifacts
+tests/            Pipeline and data-quality gates
+docs/             Implementation plan, roadmap, library usage
+.github/          Daily / weekly / push workflows
+```
+
+## Data & releases
+
+Historical daily CSVs (`release-YYYY-MM-DD`) and weekly DuckDBs (`release-week-YYYYWxx`) are published as [GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
+
+## Further reading
+
+- [Library usage guide](docs/LIBRARY_USAGE_GUIDE.md) — `MarketAnalytics` / enrichment APIs
+- [Implementation plan](docs/IMPLEMENTATION_PLAN.md) — design decisions and WBS
+- [Expert review & roadmap](docs/EXPERT_REVIEW_AND_ROADMAP.md) — quality gates and next steps
+- [Architecture overview](docs/architecture.html)
 
 ## Contributing
-Contributions are welcome! Please review the [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Licenses
-This project is licensed under the terms of the [MIT License](https://mit-license.org/).
-
-## Changelog
-Refer to [CHANGELOG.md](changelog.md) for a complete history of changes.
-
-## Contact
-For questions or feedback, please open an issue on GitHub.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under [MIT](https://mit-license.org/).

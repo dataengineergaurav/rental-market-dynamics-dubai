@@ -22,6 +22,7 @@ dependencies = [
     "duckdb",
     "scrapy>=2.13.4",
     "pyarrow>=21.0.0",
+    "dbt-duckdb>=1.10.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,0 +1,9 @@
+analysis:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # path is relative to repo root when using --project-dir analysis --profiles-dir analysis
+      path: analysis/analysis.duckdb
+      schema: main
+      threads: 4
