@@ -353,7 +353,8 @@ class TestETLPipelineIntegration:
     @patch('run_etl_pipeline.PropertyUsage')
     @patch('run_etl_pipeline.GitHubRelease')
     def test_complete_pipeline_success(self, mock_github_class, mock_property_usage_class,
-                                     mock_transformer_class, mock_downloader_class):
+                                     mock_transformer_class, mock_downloader_class,
+                                     monkeypatch, tmp_path):
         """Test complete ETL pipeline execution."""
         # Setup mocks
 
@@ -368,12 +369,11 @@ class TestETLPipelineIntegration:
         mock_publisher = Mock()
         mock_github_class.return_value = mock_publisher
         
-        # Import and run main function (getsize mocked: repo output/ state must not leak into the test)
-        with patch('run_etl_pipeline.os.path.isfile', return_value=False):
-            with patch('run_etl_pipeline.os.path.getsize', side_effect=FileNotFoundError):
-                with patch('run_etl_pipeline.logger'):
-                    from run_etl_pipeline import main
-                    assert main() is True
+        # hermetic: run in empty tmp dir so repo output/ state cannot leak in
+        monkeypatch.chdir(tmp_path)
+        with patch('run_etl_pipeline.logger'):
+            from run_etl_pipeline import main
+            assert main() is True
         
         # Verify all components were called
         mock_downloader.run.assert_called_once()
