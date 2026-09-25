@@ -27,6 +27,8 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - uses: astral-sh/setup-uv@v5
+
       - name: Install deps
         run: pip install -q -r requirements.txt && pip install -q lib/ && pip install -q duckdb pyarrow
 
@@ -45,14 +47,15 @@ jobs:
         run: |
           WEEK="${{ inputs.week }}"
           if [ -z "$WEEK" ]; then WEEK=$(date -d "7 days ago" +%GW%V); fi
+          export WEEK
           echo "WEEK=$WEEK" >> $GITHUB_ENV
           # prefer ISO week; fallback to explicit from/to for partial weeks
           uv run python -m lib.analysis.build_weekly_duckdb --week "$WEEK" || \
             uv run python -m lib.analysis.build_weekly_duckdb --from $(date -d "7 days ago" +%Y%m%d) --to $(date -d "1 day ago" +%Y%m%d)
           ls -lh output/*.duckdb
           uv run python - << 'PY'
-          import duckdb
-          f=f"output/rental_analytics_weekly_{'${{ env.WEEK }}'}.duckdb"
+          import duckdb, os
+          f=f"output/rental_analytics_weekly_{os.environ['WEEK']}.duckdb"
           # fallback if week label differed — pick newest
           import pathlib
           if not pathlib.Path(f).exists():
