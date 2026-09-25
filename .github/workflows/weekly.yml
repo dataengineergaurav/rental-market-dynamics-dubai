@@ -32,11 +32,17 @@ jobs:
       - name: Install deps
         run: pip install -q -r requirements.txt && pip install -q lib/ && pip install -q duckdb pyarrow
 
-      - name: Rehydrate daily CSVs from Releases (last 7d)
+      - name: Rehydrate daily CSVs from Releases (target week Mon-Sun)
         run: |
-          for d in 0 1 2 3 4 5 6; do
-            day=$(date -d "$d days ago" +%Y%m%d)
-            tag="release-$(date -d "$d days ago" +%Y-%m-%d)"
+          WEEK="${{ inputs.week }}"
+          if [ -z "$WEEK" ]; then WEEK=$(date -d "7 days ago" +%GW%V); fi
+          [[ "$WEEK" =~ ^[0-9]{4}W[0-9]{2}$ ]] || { echo "bad week: $WEEK (want YYYYWNn)"; exit 1; }
+          echo "WEEK=$WEEK" >> $GITHUB_ENV
+          # Monday of target ISO week — single source of truth in lib (same Jan-4 algorithm as week_to_dates)
+          MON=$(python3 -c "from lib.analysis.build_weekly_duckdb import week_to_dates; print(week_to_dates('$WEEK')[0])")
+          echo "MON=$MON" >> $GITHUB_ENV
+          for i in 0 1 2 3 4 5 6; do
+            tag="release-$(date -d "$MON +$i days" +%Y-%m-%d)"
             gh release download "$tag" --repo dataengineergaurav/rental-market-dynamics-dubai --pattern "rent_contracts_*.csv" --dir output --clobber || echo "no asset for $tag"
           done
           ls -lh output/rent_contracts_*.csv || true
@@ -49,9 +55,9 @@ jobs:
           if [ -z "$WEEK" ]; then WEEK=$(date -d "7 days ago" +%GW%V); fi
           export WEEK
           echo "WEEK=$WEEK" >> $GITHUB_ENV
-          # prefer ISO week; fallback to explicit from/to for partial weeks
+          # prefer ISO week; fallback to explicit from/to of the same Mon-Sun week for partial weeks
           uv run python -m lib.analysis.build_weekly_duckdb --week "$WEEK" || \
-            uv run python -m lib.analysis.build_weekly_duckdb --from $(date -d "7 days ago" +%Y%m%d) --to $(date -d "1 day ago" +%Y%m%d)
+            uv run python -m lib.analysis.build_weekly_duckdb --from $(date -d "$MON" +%Y%m%d) --to $(date -d "$MON +6 days" +%Y%m%d)
           ls -lh output/*.duckdb
           uv run python - << 'PY'
           import duckdb, os
