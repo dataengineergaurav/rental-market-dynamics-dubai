@@ -16,7 +16,7 @@ from pathlib import Path
 import glob
 import os
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 from lib.extract.ejari_rents_downloader import EjariRentsDownloader  # kept for test patch compatibility
@@ -170,7 +170,15 @@ def publish_artifacts_to_github(files: list, release_notes: str = "RELEASE_NOTES
         logger.info(f"  - {f} ({os.path.getsize(f) / (1024 * 1024):.1f} MB)")
 
     try:
-        GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai').publish(files=existing_files)
+        # tag the release with the data date (from rent_contracts_YYYYMMDD.csv) so
+        # weekly rehydrate (release-<Mon..Sun>) keeps matching tag <-> file
+        tag_name = None
+        for f in existing_files:
+            m = re.search(r"rent_contracts_(\d{4})(\d{2})(\d{2})", os.path.basename(f))
+            if m:
+                tag_name = f"release-{m.group(1)}-{m.group(2)}-{m.group(3)}"
+                break
+        GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai').publish(files=existing_files, tag_name=tag_name)
         logger.info("GitHub publication complete!")
     except Exception as e:
         logger.error(f"GitHub publication failed: {e}")
@@ -189,7 +197,8 @@ def main():
         logger.error("EJARI_URL environment variable not set. Please set it in .env file.")
         return False
 
-    date_str = date.today().strftime('%Y%m%d')
+    # artifacts are named for the data date (yesterday — same basis as _incremental_window)
+    date_str = (datetime.now(timezone.utc).date() - timedelta(days=1)).strftime('%Y%m%d')
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 

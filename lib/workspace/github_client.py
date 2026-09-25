@@ -43,9 +43,9 @@ class GitHubRelease:
             "Accept": "application/vnd.github.v3+json"
         }
 
-    def create_release(self):
-        tag_name = f"release-{date.today()}"
-        release_name = f"Release {date.today()}"
+    def create_release(self, tag_name=None):
+        tag_name = tag_name or f"release-{date.today()}"
+        release_name = tag_name.replace("release-", "Release ", 1)
 
         release_data = {
             "tag_name": tag_name,
@@ -83,9 +83,9 @@ class GitHubRelease:
             except Exception as e:
                 logger.error(f"Unexpected error uploading {file}: {e}")
 
-    def publish(self, files):
+    def publish(self, files, tag_name=None):
         try:
-            tag_name = f"release-{date.today()}"
+            tag_name = tag_name or f"release-{date.today()}"
             if self.release_exists(tag_name):
                 # reuse existing release for incremental re-runs same day
                 resp = requests.get(f"{GITHUB_API_URL}/repos/{self.repo}/releases/tags/{tag_name}", headers=self.headers)
@@ -93,7 +93,7 @@ class GitHubRelease:
                 release = resp.json()
                 logger.info(f"Reusing existing release {tag_name}")
             else:
-                release = self.create_release()
+                release = self.create_release(tag_name)
             self.upload_files(release, files)
         except Exception as e:
             logger.error(f"Failed to publish release: {e}")

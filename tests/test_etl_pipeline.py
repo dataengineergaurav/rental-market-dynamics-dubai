@@ -436,4 +436,4 @@ class TestETLPipelineIntegration:
             publish_artifacts_to_github(test_files)
         
         mock_github_class.assert_called_once_with('dataengineergaurav/rental-market-dynamics-dubai')
-        mock_publisher.publish.assert_called_once_with(files=test_files)
+        mock_publisher.publish.assert_called_once_with(files=test_files, tag_name=None)
