@@ -368,11 +368,12 @@ class TestETLPipelineIntegration:
         mock_publisher = Mock()
         mock_github_class.return_value = mock_publisher
         
-        # Import and run main function
+        # Import and run main function (getsize mocked: repo output/ state must not leak into the test)
         with patch('run_etl_pipeline.os.path.isfile', return_value=False):
-            with patch('run_etl_pipeline.logger'):
-                from run_etl_pipeline import main
-                assert main() is True
+            with patch('run_etl_pipeline.os.path.getsize', side_effect=FileNotFoundError):
+                with patch('run_etl_pipeline.logger'):
+                    from run_etl_pipeline import main
+                    assert main() is True
         
         # Verify all components were called
         mock_downloader.run.assert_called_once()

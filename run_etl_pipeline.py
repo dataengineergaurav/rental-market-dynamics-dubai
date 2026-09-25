@@ -32,11 +32,16 @@ logger = get_logger("ETL")
 
 
 def _incremental_window(output_dir: Path) -> tuple[str, str]:
-    """Return (from_date, to_date) as MM/DD/YYYY for incremental fetch — yesterday only (source publishes with ~1d lag; today's registrations aren't out yet)."""
+    """Return (from_date, to_date) as MM/DD/YYYY for incremental fetch — yesterday->today.
+
+    The gateway returns zero rows for single-day (from==to) ranges, so the fetch spans
+    2 days; the data date is yesterday (today's registrations aren't published yet).
+    """
     today = datetime.now(timezone.utc).date()
-    yday = today - timedelta(days=1)
-    from_date = to_date = f"{yday.month:02d}/{yday.day:02d}/{yday.year}"
-    logger.info(f"Incremental window: {from_date} -> {to_date} (yesterday only)")
+    frm = today - timedelta(days=1)
+    from_date = f"{frm.month:02d}/{frm.day:02d}/{frm.year}"
+    to_date = f"{today.month:02d}/{today.day:02d}/{today.year}"
+    logger.info(f"Incremental window: {from_date} -> {to_date} (data date: {from_date})")
     return from_date, to_date
 
 
