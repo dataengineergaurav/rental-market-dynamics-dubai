@@ -195,6 +195,25 @@ def test_n_floor_dropping_every_area_keeps_the_published_schema():
     assert out.schema == PUBLISHED_SCHEMA
 
 
+def test_bounds_are_read_from_their_single_owner():
+    """The plan's Global Constraint is that a bound is never hardcoded in more than
+    one module. Both bounds below are now READ, not restated — but nothing pinned
+    that, and nothing pinned the values: MIN_AREA_ROWS previously went 10 -> 5 with
+    the whole suite green, and the bulk bound lived as a bare `> 10` inside
+    enrichment's expression. Assert the reading AND the value together.
+    """
+    from lib.analysis.gold_indexes import BULK_GROUP_MAX, MIN_AREA_ROWS
+    from lib.config import MARKET_METRICS
+    from lib.transform.enrichment import BULK_GROUP_MAX as BULK_OWNER
+
+    assert MIN_AREA_ROWS == MARKET_METRICS["min_area_sample_size"] == 10, (
+        "the n floor has one owner: MARKET_METRICS in lib/config.py"
+    )
+    assert BULK_GROUP_MAX == BULK_OWNER == 10, (
+        "the bulk bound has one owner: BULK_GROUP_MAX in lib/transform/enrichment.py"
+    )
+
+
 def test_zero_and_negative_rent_are_dropped():
     """annual_amount > 0 is a real branch in a publishing path: a zero-rent row
     would otherwise pull an area median toward zero."""

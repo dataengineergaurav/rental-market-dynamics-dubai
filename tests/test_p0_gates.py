@@ -169,6 +169,49 @@ def test_both_psf_surfaces_share_one_band_rule(tmp_path):
     assert pu_psf == [200.0], f"PropertyUsage reported {pu_psf}, expected only 200"
 
 
+def test_sub_200_sqft_rows_are_excluded_even_when_their_psf_is_inside_the_band(tmp_path):
+    """Pins the 200 area floor, which is a SECOND literal and not the shared band.
+
+    Neither existing PSF test covers it: test_market_analytics_psf_filter's
+    small row sits at 2000 AED/sqft (out of band, so the band is what removes it)
+    and test_both_psf_surfaces_share_one_band_rule puts both rows at 1000 sqft and
+    says so. So deleting the floor clause, or changing 200 to 50, left the suite
+    green.
+
+    The 150 sqft row is the load-bearing one: 15000/150 = 100 AED/sqft, comfortably
+    INSIDE the 20-500 band, so the band cannot be what excludes it. Only the area
+    floor can. Both surfaces are checked because the floor reaches them by two
+    unrelated routes — MarketAnalytics carries its own literal, PropertyUsage
+    inherits Silver's already-nulled rent_per_sqft.
+    """
+    from lib.classes.market_analytics import MarketAnalytics
+    from lib.classes.property_usage import PropertyUsage
+    from lib.classes.silver_contract import to_silver
+
+    silver = to_silver(pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 2,
+        "property_usage_en": ["Residential"] * 2,
+        "annual_amount": [15000, 300000],
+        "actual_area": [150.0, 1000.0],
+        "RN": [1, 2],
+    })).frame
+    # the fixture is only meaningful if the sub-200 row is INSIDE the band
+    assert 20 <= 15000 / 150 <= 500, "fixture is wrong: the 150 sqft row must be in-band"
+    assert silver["rent_per_sqft"].to_list() == [None, 300.0], (
+        "fixture is wrong: the 150 sqft row must already be nulled by Silver"
+    )
+
+    ma_psf = MarketAnalytics(silver).calculate_psf_metrics()["psf"].to_list()
+    assert ma_psf == [300.0], f"MarketAnalytics kept {ma_psf}, expected only 300"
+
+    src = tmp_path / "silver.parquet"
+    out = tmp_path / "property_usage.csv"
+    silver.write_parquet(src)
+    PropertyUsage(str(out)).transform(str(src))
+    pu_psf = pl.read_csv(out)["avg_psf"].to_list()
+    assert pu_psf == [300.0], f"PropertyUsage reported {pu_psf}, expected only 300"
+
+
 def test_validator_gate_no_crash_on_small_df():
     df = pl.DataFrame({
         "contract_id": [1, 2],

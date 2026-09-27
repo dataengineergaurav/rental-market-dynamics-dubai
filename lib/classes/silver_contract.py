@@ -67,12 +67,12 @@ dropped_columns: dict[str, str] = {
     "VERSION_AR": "100% upstream '?' mask, unrecoverable",
     "IS_FREE_HOLD_AR": "100% upstream '?' mask, unrecoverable",
     "IS_FREE_HOLD_EN": "is_free_hold bool is authoritative (1:1 verified)",
-    # MASTER_PROJECT_EN: near-total null upstream, but NOT 100% — 3 of 4580
-    # rows on 20260916 and 1 of 1714 on 20260913 carry a value. The field is
-    # still declared on the model because dim_project.sql:10 reads it, and the
-    # late non-null values are what broke pl.DataFrame's 100-row schema
-    # inference; see to_silver.
-    "MASTER_PROJECT_EN": "near-total null upstream, never 100%",
+    # MASTER_PROJECT_EN is NOT in this dict, and that is the point. It is
+    # near-total null upstream but NOT 100% — 3 of 4580 rows on 20260916 and 1 of
+    # 1714 on 20260913 carry a value — so it is a carried column, not a dropped
+    # one, and listing it here would tell a reader of the Silver parquet it had
+    # been removed when it is present in every frame. See the model field.
+    #
     # MASTER_PROJECT_AR: near-total null upstream, but NOT 100% — 4 non-empty
     # of 16075 rows across the five daily files: 'جنات ' (x2), 'هيلز بارك',
     # 'رمرام - الرمث'. Same 1 on 20260913 / 3 on 20260916 split as EN. Unlike
@@ -111,6 +111,11 @@ class SilverRentContract(BaseModel):
 
     # project
     project_name_en: Optional[str] = None
+    # Carried despite being near-total null upstream (3 of 4580 rows on
+    # 20260916, 1 of 1714 on 20260913): dim_project.sql:10 reads it, and those
+    # late non-null values are exactly what broke pl.DataFrame's 100-row schema
+    # inference — see to_silver. Declared Optional, which is what makes the
+    # leading null rows survivable instead of quarantined.
     master_project_en: Optional[str] = None
     project_ar: Optional[str] = None
 
@@ -161,7 +166,12 @@ class SilverRentContract(BaseModel):
         """Derive contract facts and record every rule that fires. Never raises:
         a bad cell keeps its value and is named in `violations` so the row
         survives to Silver (ADR-03 fail-open, ADR-02 grain)."""
-        v = self.violations
+        # Copy, append into the copy, then write the copy back. Appending
+        # straight into self.violations works today only because pydantic hands
+        # the model a fresh list; relying on that is how a future change to
+        # _project turns every violation count into a silent zero, because the
+        # appends would land in a local and never reach the field.
+        v = list(self.violations)
         set_ = object.__setattr__
 
         max_rent = Decimal(VALIDATION_THRESHOLDS["max_annual_rent"])
@@ -204,7 +214,11 @@ class SilverRentContract(BaseModel):
                 set_(self, "duration_days", days)
                 set_(self, "is_short_term", days < SHORT_TERM_DAYS)
 
-        if self.contract_amount and self.annual_amount > 0:
+        # `is not None`, never truthiness: Decimal("0") is falsy, and a zero
+        # contract amount against a non-zero annual amount is exactly the
+        # disagreement this rule exists to catch — it is the case most likely
+        # to be real (a rent paid as an upfront nil-consideration registration).
+        if self.contract_amount is not None and self.annual_amount > 0:
             implied = self.contract_amount / self.annual_amount
             set_(self, "implied_years", implied.quantize(Decimal("0.0001")))
             if self.duration_days:
@@ -217,6 +231,7 @@ class SilverRentContract(BaseModel):
             if isinstance(value, str) and value != value.strip():
                 set_(self, col, value.strip())
 
+        set_(self, "violations", v)
         return self
 
 
@@ -264,11 +279,21 @@ _SOURCE_COLUMNS = {
 # canonical snake_case names that need no mapping
 _MODEL_FIELDS = frozenset(SilverRentContract.model_fields)
 
+# `violations` is a model field with no _SOURCE_COLUMNS entry, so the fallback in
+# _project would copy it out of ANY frame that carries the column — including the
+# frame to_silver itself just produced. Every rule then re-fires and re-appends
+# its own name, so a second pass double-counts (4122 -> 8244 on the real
+# rent_contracts_20260916.csv). to_silver is the documented public API and
+# transform_rents overwrites the parquet with its output, so the second pass is
+# reachable, not hypothetical. The other derived fields are harmless to re-project
+# because set_ overwrites them; violations is the only one that ACCUMULATES.
+_NEVER_SOURCED = frozenset({"violations"})
+
 
 def _project(source: dict) -> dict:
     """Map one raw row onto the model's field names."""
     out = {}
-    for field in _MODEL_FIELDS:
+    for field in _MODEL_FIELDS - _NEVER_SOURCED:
         for candidate in _SOURCE_COLUMNS.get(field, (field,)):
             if candidate in source:
                 out[field] = source[candidate]
@@ -415,6 +440,14 @@ def _rollup(frame: pl.DataFrame, out_violations: dict[str, int]) -> pl.DataFrame
 
     rows = []
     for key, block in multi.group_by(list(_GROUP_KEY), maintain_order=True):
+        # `[0]` is a CHOICE, not an invariant. Members of a block can disagree
+        # about total_properties: 2 of the 259 real groups do — 18 rows split
+        # {4, 14} and 11 rows split {3, 5} — so "they never disagree" is false.
+        # Both still classify the same under any read (observed is below every
+        # declared value, hence merged_contract_group either way), which is why
+        # swapping [0] for [-1] changes no count today. Do not harden this into
+        # an assumption without a tie-break rule; if a block is ever observed
+        # ABOVE one member's declaration, this silently misclassifies it.
         declared = block["total_properties"][0]
         observed = block.height
         # annual_amount is a _GROUP_KEY member, so it CANNOT disagree inside a

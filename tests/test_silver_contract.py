@@ -611,3 +611,130 @@ def test_merge_and_partial_capture_are_counted_separately():
     res = to_silver(pl.DataFrame(merged + _block(3)[:1]))
     assert res.violation_counts.get("merged_contract_group") == 4
     assert res.violation_counts.get("partial_contract_capture") == 1
+
+
+def test_zero_contract_amount_is_still_a_duration_mismatch():
+    """`if self.contract_amount:` is falsy for Decimal("0"), so a zero contract
+    amount skipped the whole reconciliation block and emitted NO violation. A nil
+    annual consideration against a 364-day term is precisely the disagreement the
+    rule exists to catch, and it was the one case guaranteed to be silent."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    zero = SilverRentContract(**_row(contract_amount=Decimal("0")))
+    assert zero.implied_years == 0, "0/annual_amount reconciles to zero, not to None"
+    assert "amount_duration_mismatch" in zero.violations
+
+    # the control: absent is not zero, and must stay silent
+    absent = SilverRentContract(**_row(contract_amount=None))
+    assert absent.implied_years is None
+    assert "amount_duration_mismatch" not in absent.violations
+
+
+def test_to_silver_is_idempotent_on_its_own_output(tmp_path):
+    """to_silver is the documented public API (docs/LIBRARY_USAGE_GUIDE.md 2b) and
+    transform_rents overwrites the parquet with its output, so re-running to_silver
+    over Silver output is a reachable second pass, not a hypothetical one.
+
+    The bug: `violations` is a model field with no _SOURCE_COLUMNS entry, so
+    _project copied it out of any frame carrying the column — including the one
+    to_silver just produced. Every rule then re-fired and re-appended its own name.
+    Real, on the 4580-row rent_contracts_20260916.csv: 4122 -> 8244.
+
+    TWO assertions, and the second is what makes the first honest. pass1 == pass2
+    is also satisfied by a build that counts nothing at all, which is precisely what
+    the naive fix produces: copy the list, append into the copy, and never write it
+    back to the field. So the expected counts are spelled out.
+    """
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    rows = [
+        _row(annual_amount=Decimal("-1"), actual_area=Decimal("1")),
+        _row(annual_amount=Decimal("-1"), actual_area=Decimal("1")),
+        _row(annual_amount=Decimal("6650000"), actual_area=Decimal("882158")),
+    ]
+    first = to_silver(pl.DataFrame(rows))
+    assert first.violation_counts == {
+        "annual_amount_not_positive": 2,
+        "annual_amount_above_max": 1,
+        "actual_area_below_psf_floor": 2,
+        "actual_area_above_max": 1,
+        # _row() carries contract_amount=225000, so a negative annual_amount
+        # implies -225000 years against a declared 0.9966 — a mismatch too.
+        "amount_duration_mismatch": 1,
+    }, "guard the counts themselves, not just their equality across passes"
+
+    # round-trip through parquet, which is how the second pass is actually reached
+    src = tmp_path / "silver.parquet"
+    first.frame.write_parquet(src)
+
+    second = to_silver(pl.read_parquet(src))
+    assert second.violation_counts == first.violation_counts, (
+        f"re-validation changed the counts: {first.violation_counts} -> "
+        f"{second.violation_counts}"
+    )
+    assert second.frame["violations"].to_list() == first.frame["violations"].to_list(), (
+        "the per-row column must be unchanged, not just the tallies"
+    )
+
+
+def test_parking_source_column_is_cast_to_has_parking():
+    """_CASTS is keyed by SOURCE column, and the PARKING entry is what makes an
+    Int64 column with nulls survivable: pydantic rejects None for bool, so without
+    the cast the null rows are quarantined instead of reaching Silver.
+
+    Nothing else in the suite supplies a PARKING column, so deleting this entry
+    outright leaves every other test green — which is how the model-field-keyed
+    version of this cast shipped and dropped 4251 of 4306 rows.
+    """
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    df = pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 3,
+        "annual_amount": [90000.0] * 3,
+        "actual_area": [900.0] * 3,
+        "PARKING": [1, None, 0],
+    })
+    res = to_silver(df)
+    assert len(res.quarantined) == 0, "the null PARKING row must not be quarantined"
+    assert res.frame["has_parking"].to_list() == [True, False, False]
+    assert res.frame["has_parking"].dtype == pl.Boolean
+
+
+def test_no_dropped_column_is_actually_carried_in_every_frame():
+    """dropped_columns exists so a reader of the Silver parquet can tell
+    "intentionally removed" from "silently lost" (spec 3.6). An entry for a column
+    that IS carried inverts that promise, and its own comment used to admit it:
+    MASTER_PROJECT_EN was listed as dropped while the comment above it said the
+    field "is still declared on the model because dim_project.sql:10 reads it". It
+    is in every output frame.
+
+    Keys are UPPERCASE source names and model fields are snake_case, so the
+    existing one-directional ARABIC_DROPPED assertion could never see the
+    collision. Compare case-folded.
+    """
+    import polars as pl
+    from lib.classes.silver_contract import (
+        SilverRentContract,
+        dropped_columns,
+        to_silver,
+    )
+
+    for key in dropped_columns:
+        assert key.lower() not in SilverRentContract.model_fields, (
+            f"{key} is documented as dropped but is a model field, so it ships in "
+            "every frame — remove the entry or stop carrying the column"
+        )
+
+    frame = to_silver(pl.DataFrame({
+        "area_name_en": ["Dubai Marina"],
+        "annual_amount": [90000.0],
+        "actual_area": [900.0],
+        # canonical name: RentsTransformer aliases MASTER_PROJECT_EN to this, and
+        # only 13 columns are aliased, so a raw UPPERCASE frame would test the
+        # alias layer rather than whether the column is carried.
+        "master_project_en": ["Hills Park"],
+    })).frame
+    assert "master_project_en" in frame.columns, "it is carried, which is the point"
+    assert frame["master_project_en"][0] == "Hills Park"

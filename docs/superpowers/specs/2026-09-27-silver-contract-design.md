@@ -91,10 +91,23 @@ VIOLATION when abs(implied_years - declared_years) / declared_years > 0.05
 This holds to 0.0065 years on the current payload, so the 5% band is generous and will not fire on
 healthy data.
 
-The 300-day threshold is retained for `is_short_term` but is reconciled against the two existing
+The 300-day threshold is retained for `is_short_term`. Reconciling it against the two existing
 thresholds in the codebase — `VALIDATION_THRESHOLDS` `min_contract_days: 30` / `max_contract_days: 730`
 (`lib/config.py:102`) and the 180/365 buckets in `_add_contract_duration`
-(`lib/transform/enrichment.py:174`). All three now read from one constant in `lib/config.py`.
+(`lib/transform/enrichment.py:174`) — is **DESCOPED from this branch and not done.**
+
+All three still exist independently, and they are not three readings of one rule:
+
+| Threshold | Value | Owner | What it decides |
+| --- | --- | --- | --- |
+| `SHORT_TERM_DAYS` | 300 | `silver_contract.py:26` | the boolean `is_short_term` on Silver |
+| `min_contract_days` / `max_contract_days` | 30 / 730 | `VALIDATION_THRESHOLDS`, `lib/config.py` | a validity warning in `validators.py` |
+| `_add_contract_duration` buckets | 180 / 365 | `enrichment.py:174-179`, hardcoded | the label `contract_duration_category` |
+
+Unifying them changes `enrichment.py`'s bucketing, which reclassifies published rows — a data
+change, not a refactor, and not this branch's job. The 30/730 pair is not even the same *kind* of
+bound: 300 sits between the 180/365 label boundaries, while 30/730 is an out-of-range check. Recorded
+as an open follow-up, not claimed as shipped.
 
 ### 2.3 Multi-property blocks are real — defect 3
 
@@ -290,9 +303,12 @@ apart. Each keeps only what it alone can do:
 ### 3.6 Silent drops become recorded drops
 
 With no `model_config`, the draft silently discarded 14 columns. The model instead sets
-`ConfigDict(extra="ignore", frozen=True)` and exposes a module-level `dropped_columns` tuple naming
+`ConfigDict(extra="ignore", frozen=True)` and exposes a module-level `dropped_columns` dict naming
 every discarded column and its reason, so a reader of the Silver parquet can tell the difference
-between "column intentionally removed" and "column silently lost".
+between "column intentionally removed" and "column silently lost". A column that is *carried* is not
+an entry — `MASTER_PROJECT_EN` is near-total null upstream and still ships, because
+`dim_project.sql:10` reads it, so listing it as dropped would assert the opposite of what the
+parquet shows.
 
 ---
 
@@ -351,15 +367,31 @@ value must aggregate over **deduplicated contracts**, not property rows.
    `lib/transform/enrichment.py:90`. The shipped `output/property_usage_20260913.csv` still reports
    Residential `avg_psf 4691.52` / `median_psf 995.27` — both far outside the 20–500 band at
    `lib/config.py:96`, and the exact value `docs/IMPLEMENTATION_PLAN.md:31` says must never ship. The
-   guard is correct but never reaches the report. Fix: `PropertyUsage` reads the enriched
-   `price_per_sqft` instead of recomputing it. One place, not two.
+   guard is correct but never reaches the report. Fix: `PropertyUsage` reads Silver's
+   `rent_per_sqft` instead of recomputing it. One place, not two.
 2. **The Phase 2 gate is not met.** `docs/IMPLEMENTATION_PLAN.md:83` requires medians within
    20k–500k and no `>1M` leak. Measured on the shipped `area_median_index_20260913-17.csv`:
    121/121 areas clear `n >= 10`, but **26 areas have `max_rent > 1M`** (up to AED 4.3M),
-   **`median_rent` reaches AED 590,000** (Al Goze Industrial First — Labor Camps), and **74 of 121
-   areas show a mean/median skew above 20%** with `mean_rent` published beside `median_rent` in the
-   same file. The `is_bulk_registration` flag and the Hotel / Labor Camps / Virtual Unit exclusion
-   from `docs/IMPLEMENTATION_PLAN.md:46` were never applied to this artifact.
+   **`median_rent` reaches AED 590,000**, and **74 of 121 areas show a mean/median skew above 20%**
+   with `mean_rent` published beside `median_rent` in the same file.
+
+   Correcting two claims this bullet previously made, both of which were false:
+
+   - The `is_bulk_registration` flag and the Hotel / Labor Camps / Virtual Unit exclusion from
+     `docs/IMPLEMENTATION_PLAN.md:46` **are** applied. The committed `gold_area_median` view at
+     `build_weekly_duckdb.py:116-130` carries all three, and does so correctly — Virtual Unit is
+     filtered on `ejari_property_type_en`, not the sub_type column, which is where the plan's own
+     text is wrong. The measured CSV is a local artifact that predates the view: 121 areas against
+     the view's 118, from a fact table holding 3,048 bulk rows and 307 Virtual Unit rows that the
+     view excludes. This prerequisite is therefore already satisfied in the shipped view, and the
+     exclusion is not what will close the gate.
+   - Al Goze Industrial First's AED 590,000 median is **not** its Labor Camps rows. That area
+     carries 13 Labor Camps rows, all excluded by the view, and still publishes a 590,000 median
+     across 15 surviving Warehouse / Office / Showroom rows — the 3,310 sqft Showroom, an expensive
+     industrial asset. The subtype exclusion cannot reach it, and neither can the `count > 10` bulk
+     rule: only 89 of 11,425 surviving rows (0.78%) exceed 1M, in groups of 1–8.
+
+   The gate stays RED, and the cause is whole-asset leases in mixed stock, not a missing filter.
 
 Both are small, localised fixes. Neither is in scope for the Silver contract, but the marts are not
 safe to build until they land.
@@ -372,13 +404,13 @@ safe to build until they land.
 | `lib/classes/validators.py` | Remove pydantic import and `BronzeRentContract`; shed the three per-row range checks; keep aggregate checks |
 | `lib/transform/rents_transformer.py` | `encoding="utf-8-lossy"` → strict `"utf-8"` (`:22`); repoint `contract_id` alias to `record_id` (`:53`) |
 | `run_etl_pipeline.py` | Narrow `except Exception` at `:139` so an import failure can no longer masquerade as a passing gate; invoke `to_silver()` in `transform_rents()`, overwriting the same parquet |
-| `lib/config.py` | Remove `contract_id` from `required_fields` (`:190`); single `SHORT_TERM_DAYS = 300` constant reconciling the 180/365/300 thresholds |
+| `lib/config.py` | Remove `contract_id` from `required_fields` (`:190`). Add a `200`-sqft reporting floor and one shared `psf_band_filter`. **Not** a `SHORT_TERM_DAYS` constant: the 180/365/300 reconciliation is descoped, see §2.2 |
 | `tests/test_silver_contract.py` | **New.** Import smoke test, construction test, coercion counts, key cardinality, area-unit guard, reconciliation check |
 | `pyproject.toml` | pydantic stays (added in the uncommitted change, `:25`) |
 | `requirements.txt` | Add `pydantic>=2`; remove orphan `psutil` (in `requirements.txt` but not `pyproject.toml`) |
 | `docs/IMPLEMENTATION_PLAN.md` | Add ADR-06 (pydantic); record the 10.4% PSF-eligible rate against the P0 exit gate at `:31`; reconcile Phase 0/2 status against what already shipped |
 | `README.md` | Correct the pydantic description at `:43` — it is a Silver contract model, not "typed analysis result models" |
-| `lib/classes/property_usage.py` | Read the enriched `price_per_sqft` instead of re-deriving PSF at `:90-96` (Gold prerequisite 1) |
+| `lib/classes/property_usage.py` | Read Silver's `rent_per_sqft` instead of re-deriving PSF at `:90-96` (Gold prerequisite 1). Not the enriched `price_per_sqft`: that is `enrichment.py`'s separate column, guarded by its own `200` literal, and reading it would re-import the second computation site this prerequisite exists to remove |
 | `lib/analysis/area_median_index` | Apply `is_bulk_registration` and the Hotel / Labor Camps / Virtual Unit exclusion; publish `median_rent` as the headline (Gold prerequisite 2) |
 
 No new artifact is produced. The typed frame overwrites the existing

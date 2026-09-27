@@ -10,3 +10,9 @@ requests-mock
 scrapy>=2.13.4
 duckdb
 pydantic>=2
+# No module imports pyarrow, so an import grep calls it a phantom. It is still
+# load-bearing: build_weekly_duckdb.py:112 calls enriched.to_arrow() to register
+# the frame with duckdb, which needs pyarrow at runtime. Without this line, the
+# README's `pip install -r requirements.txt` installs cleanly and the weekly
+# builder then fails.
+pyarrow>=21.0.0

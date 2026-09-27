@@ -5,7 +5,7 @@ This module contains all configuration settings, constants, and market-specific
 parameters for analyzing Dubai rental market data.
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict
 from enum import Enum
 
 import polars as pl
@@ -273,8 +273,15 @@ def psf_band_filter(psf_column: str = "psf"):
 
     This is a publishing decision, not a computation: a 200+ sqft unit at
     8228 AED/sqft is a real registration, so Silver keeps it and Gold declines
-    to report it. Shared by PropertyUsage and MarketAnalytics so the two PSF
-    surfaces cannot drift.
+    to report it. PropertyUsage and MarketAnalytics share this helper, so the
+    BAND is defined once.
+
+    The AREA FLOOR is not shared, and there are three PSF computation sites, not
+    two: silver_contract.py:189 (behind PSF_MIN_AREA_SQFT, the reporting floor
+    this helper's docstring refers to), market_analytics.py:82 and
+    enrichment.py:94, each still carrying its own `200` literal. Follow-up: have
+    the latter two read Silver's rent_per_sqft and delete two divisions and two
+    literals. Do not describe the surfaces as unable to disagree until that lands.
     """
     return (
         (

@@ -18,6 +18,11 @@ from lib.config import (
 
 logger = logging.getLogger(__name__)
 
+# A group is bulk when its (area, amount) count is STRICTLY greater than this.
+# Exported so the bound has one owner: lib/analysis/gold_indexes.py filters on
+# `<= BULK_GROUP_MAX` and must not restate 10.
+BULK_GROUP_MAX = 10
+
 
 class RentContractsEnricher:
     """
@@ -236,10 +241,10 @@ class RentContractsEnricher:
         """Flag bulk registrations: same area+amount repeated >10 times (Naif/Hor)."""
         if "area_name_en" in df.columns and "annual_amount" in df.columns:
             logger.debug("Adding bulk registration flag...")
-            # count per (area, amount) — marks whole group if count>10
+            # count per (area, amount) — marks whole group past BULK_GROUP_MAX
             counts = df.group_by(["area_name_en", "annual_amount"]).agg(pl.len().alias("_bulk_n"))
             df = df.join(counts, on=["area_name_en", "annual_amount"], how="left")
-            df = df.with_columns((pl.col("_bulk_n") > 10).alias("is_bulk_registration")).drop("_bulk_n")
+            df = df.with_columns((pl.col("_bulk_n") > BULK_GROUP_MAX).alias("is_bulk_registration")).drop("_bulk_n")
         else:
             df = df.with_columns(pl.lit(False).alias("is_bulk_registration"))
         return df

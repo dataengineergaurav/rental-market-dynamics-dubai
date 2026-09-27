@@ -5,7 +5,6 @@ Property usage analysis with enhanced market insights.
 import logging
 import polars as pl
 from datetime import date
-from typing import Optional
 
 from lib.config import psf_band_filter
 
@@ -95,7 +94,14 @@ class PropertyUsage:
             # deliberately absent from the filter below.
             #
             # The band itself lives in one place, lib.config.psf_band_filter,
-            # shared with MarketAnalytics so the two PSF surfaces cannot drift.
+            # shared with MarketAnalytics, so the two agree on what is
+            # reportable. The AREA FLOOR is not shared and there are three PSF
+            # computation sites, not two: silver_contract.py:189 (behind
+            # PSF_MIN_AREA_SQFT, applied above), market_analytics.py:82 and
+            # enrichment.py:94, each still carrying its own `200` literal.
+            # Follow-up: have the latter two read rent_per_sqft and delete two
+            # divisions and two literals. Do not call the surfaces unable to
+            # disagree until that lands.
             if "rent_per_sqft" in schema:
                 psf_stats = lf.filter(
                     pl.col("property_usage_en").is_not_null() &
