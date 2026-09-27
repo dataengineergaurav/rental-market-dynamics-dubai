@@ -354,3 +354,29 @@ def test_row_hash_normalises_whitespace_before_hashing():
     assert res.frame["row_hash"][0] == res.frame["row_hash"][1]
     # the model normalises both to the same area too
     assert res.frame["area_name_en"].to_list() == ["Dubai Marina", "Dubai Marina"]
+
+
+def test_row_hash_distinguishes_zero_from_absent():
+    """`or ""` would hash a zero-rent row as if annual_amount were missing, so
+    a zero-amount row and a null-amount row would collide. Only None means
+    absent."""
+    from lib.classes.silver_contract import _row_hash
+
+    base = {
+        "area_name_en": "Dubai Marina",
+        "ejari_property_sub_type_en": "Flat",
+        "contract_start_date": "2026-09-20",
+        "annual_amount": None,
+        "actual_area": 900,
+    }
+    zero = {**base, "annual_amount": 0}
+    assert _row_hash(zero) != _row_hash(base), "0 must not hash as absent"
+    # every falsy zero must clear the None bar, in whatever numeric form
+    assert _row_hash({**base, "annual_amount": 0.0}) != _row_hash(base)
+    # KNOWN GAP, deliberately not fixed here: str(0) is "0" and str(0.0) is
+    # "0.0", so the two spellings hash differently — as do Decimal("225000")
+    # and 225000.0, which is the CSV path versus the test-helper path.
+    # Unified numeric normalisation is a separate change; asserting the current
+    # behaviour here makes any future fix a deliberate, visible edit rather
+    # than a silent hash migration.
+    assert _row_hash({**base, "annual_amount": 0.0}) != _row_hash(zero)

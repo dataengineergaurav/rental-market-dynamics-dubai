@@ -286,7 +286,12 @@ def _row_hash(payload: dict) -> str:
     (different P_SKIP/P_TAKE pagination) does change record_id, and this hash is
     what stays put when that happens. Not unique by design: it resolves 3378 of
     4306 rows, so it deduplicates, it does not identify."""
-    parts = [str(payload.get(f) or "").strip() for f in _ROW_HASH_FIELDS]
+    # `or ""` is wrong for numbers: 0 and 0.0 are falsy, so a zero-rent row would
+    # hash as if the field were absent. Test for None explicitly.
+    parts = [
+        "" if payload.get(f) is None else str(payload.get(f)).strip()
+        for f in _ROW_HASH_FIELDS
+    ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
