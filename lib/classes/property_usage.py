@@ -7,6 +7,12 @@ import polars as pl
 from datetime import date
 from typing import Optional
 
+from lib.config import (
+    COMMERCIAL_USAGE,
+    RESIDENTIAL_USAGE,
+    VALIDATION_THRESHOLDS,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,24 +91,51 @@ class PropertyUsage:
                 # Join with main stats
                 df = df.join(size_stats, on="property_usage_en", how="left")
             
-            # Add PSF if area data available
-            if "actual_area" in lf.collect_schema().names():
+            # PSF is READ, never recomputed. Silver already applied the
+            # PSF_MIN_AREA_SQFT (200) floor when it derived rent_per_sqft, and
+            # that null IS the guard — repeating the division here bypassed it
+            # and shipped Residential avg_psf 4691 against a 20-500 band
+            # (output/property_usage_20260913.csv). The 200 floor is therefore
+            # deliberately absent from the filter below.
+            #
+            # What IS repeated is the validity band, because that is a
+            # publishing decision, not a computation: a 200+ sqft unit at
+            # 8228 AED/sqft is a real luxury registration, so Silver keeps it
+            # (deliberately) and Gold decides not to report it. Same
+            # constants, same intent as MarketAnalytics.calculate_psf_metrics.
+            if "rent_per_sqft" in schema:
+                psf = pl.col("rent_per_sqft").cast(pl.Float64)
                 psf_stats = lf.filter(
-                    (pl.col("property_usage_en").is_not_null()) &
-                    (pl.col("actual_area").is_not_null()) &
-                    (pl.col("actual_area") > 0) &
-                    (pl.col("annual_amount").is_not_null()) &
-                    (pl.col("annual_amount") > 0)
-                ).with_columns(
-                    (pl.col("annual_amount") / pl.col("actual_area")).alias("psf")
+                    pl.col("property_usage_en").is_not_null() &
+                    psf.is_not_null() &
+                    (
+                        (
+                            pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE) &
+                            psf.is_between(VALIDATION_THRESHOLDS["min_psf_residential"],
+                                           VALIDATION_THRESHOLDS["max_psf_residential"])
+                        ) | (
+                            pl.col("property_usage_en").is_in(COMMERCIAL_USAGE) &
+                            psf.is_between(VALIDATION_THRESHOLDS["min_psf_commercial"],
+                                           VALIDATION_THRESHOLDS["max_psf_commercial"])
+                        )
+                    )
                 ).group_by("property_usage_en").agg([
-                    pl.col("psf").mean().alias("avg_psf"),
-                    pl.col("psf").median().alias("median_psf"),
+                    psf.mean().alias("avg_psf"),
+                    psf.median().alias("median_psf"),
                 ]).collect()
-                
+
                 # Join with main stats
                 df = df.join(psf_stats, on="property_usage_en", how="left")
-            
+            else:
+                # A pre-Silver parquet has no guarded column. Publishing no PSF
+                # is the honest answer; recomputing it is the bug. Warn, because
+                # a silently missing column is indistinguishable from no data.
+                logger.warning(
+                    f"No 'rent_per_sqft' column in {input_file} — the file predates "
+                    "the Silver contract. avg_psf/median_psf omitted rather than "
+                    "recomputed from actual_area, which would bypass the 200 sqft floor."
+                )
+
             # Add report date
             df = df.with_columns(
                 pl.lit(date.today()).cast(pl.Date).alias("report_date")
