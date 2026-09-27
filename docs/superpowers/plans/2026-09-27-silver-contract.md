@@ -21,6 +21,11 @@
 - **No leading-underscore pydantic field names.** Pydantic v2 raises `NameError` at class-definition time; this is the exact bug that broke the module.
 - **Derived fields must default to `None`.** A derived field declared without a default is *required*, so `mode="after"` validators never run and the model cannot be constructed.
 - **Test command:** `uv run pytest -q` (or `.venv/bin/python -m pytest -q`). `make test` runs `pytest .`.
+- **polars `Int8` temporal overflow trap.** `dt.hour()`, `dt.minute()`, `dt.second()` and friends
+  return **Int8**. Arithmetic on them overflows silently: `dt.hour() * 3600` for hour=1 yields 16,
+  not 3600. Any expression combining a temporal accessor with a multiplier can produce garbage with
+  no error. Cast to Int64 first, or avoid the arithmetic. This produced a wrong "748 non-midnight
+  stamps" figure that survived into a code comment before being caught.
 - **Reference data:** `output/rent_contracts_20260917.csv` — 4306 rows × 44 columns, valid UTF-8, `CONTRACT_NUMBER` 100% null, `PROPERTY_ID` constant 0, median `ACTUAL_AREA` 75.0, 443/4306 (10.3%) rows PSF-eligible (446 clear the 200 floor, but 3 of those exceed the 50000 max and route to actual_area_above_max).
 
 ---
