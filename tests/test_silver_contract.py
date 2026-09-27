@@ -206,3 +206,78 @@ def test_whitespace_is_stripped_under_frozen_config():
     assert c.area_name_en == "Dubai Marina"
     assert c.ejari_property_type_en == "Unit"
     assert c.ejari_property_sub_type_en == "Flat"
+
+
+def _frame(n=3, **over):
+    import polars as pl
+
+    rows = [_row(**over) for _ in range(n)]
+    return pl.DataFrame(rows)
+
+
+def test_to_silver_returns_one_row_per_registration():
+    from lib.classes.silver_contract import to_silver
+
+    res = to_silver(_frame(3))
+    assert len(res.frame) == 3
+    assert res.frame["area_name_en"].to_list() == ["Dubai Marina"] * 3
+
+
+def test_to_silver_never_raises_on_garbage():
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    bad = pl.DataFrame(
+        {
+            "area_name_en": ["", "Dubai Marina", None],
+            "annual_amount": [-5.0, 70000.0, 0.0],
+            "actual_area": [1.0, 900.0, -3.0],
+            "contract_start_date": [None] * 3,
+            "contract_end_date": [None] * 3,
+        }
+    )
+    res = to_silver(bad)
+    # the null area_name_en row cannot construct, so it is quarantined, not
+    # discarded. frame and quarantined are disjoint and together cover the input.
+    assert len(res.frame) == 2
+    assert len(res.quarantined) == 1
+    assert len(res.frame) + len(res.quarantined) == bad.height
+    assert res.violation_counts
+
+
+def test_to_silver_nulls_masked_arabic_cells():
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    df = _frame(1, nearest_metro_ar="??", area_name_ar="برج خليفة")
+    res = to_silver(df)
+    assert res.frame["nearest_metro_ar"][0] is None, "masked cell becomes null"
+    assert res.frame["area_name_ar"][0] == "برج خليفة", "intact Arabic survives"
+    assert res.violation_counts.get("masked_arabic_cell", 0) == 1
+
+
+def test_to_silver_drops_unrecoverable_arabic_columns():
+    import polars as pl
+    from lib.classes.silver_contract import ARABIC_DROPPED, dropped_columns, to_silver
+
+    df = _frame(1)
+    df = df.with_columns(pl.lit("??").alias("VERSION_AR"), pl.lit("??").alias("IS_FREE_HOLD_AR"))
+    res = to_silver(df)
+    for col in ARABIC_DROPPED:
+        assert col not in res.frame.columns
+    assert "VERSION_AR" in dropped_columns
+
+
+def test_no_row_is_ever_discarded():
+    """ADR-03 fail-open: every input row lands in exactly one of frame or
+    quarantined. A row that cannot construct is quarantined, never dropped."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    df = pl.DataFrame({
+        "area_name_en": ["Dubai Marina", None, "Business Bay"],
+        "annual_amount": [90000.0, 90000.0, 90000.0],
+        "actual_area": [900.0, 900.0, -1.0],
+    })
+    res = to_silver(df)
+    assert len(res.frame) + len(res.quarantined) == df.height

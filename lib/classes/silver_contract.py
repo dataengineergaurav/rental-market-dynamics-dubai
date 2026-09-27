@@ -12,11 +12,14 @@ The model is frozen, so derived fields must be set with
 object.__setattr__(self, ...) inside mode="after" validators, never self.x = ...,
 which raises under frozen=True.
 """
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+import hashlib
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+import polars as pl
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lib.config import VALIDATION_THRESHOLDS
 
@@ -172,4 +175,149 @@ class SilverRentContract(BaseModel):
                 set_(self, col, value.strip())
 
         return self
+
+
+ARABIC_PARTIAL = (
+    "nearest_metro_ar",
+    "nearest_mall_ar",
+    "project_ar",
+    "nearest_landmark_ar",
+)
+
+
+@dataclass
+class SilverContractResult:
+    frame: pl.DataFrame
+    quarantined: pl.DataFrame
+    groups: pl.DataFrame
+    violation_counts: dict[str, int]
+
+    def __len__(self) -> int:
+        return self.frame.height
+
+
+# model field -> source column. Canonical snake_case first (added by
+# RentsTransformer's alias step), then the original UPPERCASE column.
+_SOURCE_COLUMNS = {
+    "total_properties": ("total_properties", "TOTAL_PROPERTIES"),
+    "is_free_hold": ("is_free_hold", "IS_FREE_HOLD"),
+    "version_en": ("version_en", "VERSION_EN"),
+    "rooms": ("rooms", "ROOMS"),
+    "has_parking": ("has_parking", "PARKING"),
+    "area_name_ar": ("area_name_ar", "AREA_AR"),
+    "property_usage_ar": ("property_usage_ar", "USAGE_AR"),
+    "property_type_ar": ("property_type_ar", "PROP_TYPE_AR"),
+    "property_sub_type_ar": ("property_sub_type_ar", "PROP_SUB_TYPE_AR"),
+    "project_ar": ("project_ar", "PROJECT_AR"),
+    "nearest_metro_en": ("nearest_metro_en", "NEAREST_METRO_EN"),
+    "nearest_mall_en": ("nearest_mall_en", "NEAREST_MALL_EN"),
+    "nearest_landmark_en": ("nearest_landmark_en", "NEAREST_LANDMARK_EN"),
+    "nearest_metro_ar": ("nearest_metro_ar", "NEAREST_METRO_AR"),
+    "nearest_mall_ar": ("nearest_mall_ar", "NEAREST_MALL_AR"),
+    "nearest_landmark_ar": ("nearest_landmark_ar", "NEAREST_LANDMARK_AR"),
+    "row_hash": ("row_hash",),
+    "record_id": ("record_id",),
+}
+# canonical snake_case names that need no mapping
+_MODEL_FIELDS = frozenset(SilverRentContract.model_fields)
+
+
+def _project(source: dict) -> dict:
+    """Map one raw row onto the model's field names."""
+    out = {}
+    for field in _MODEL_FIELDS:
+        for candidate in _SOURCE_COLUMNS.get(field, (field,)):
+            if candidate in source:
+                out[field] = source[candidate]
+                break
+    return out
+
+
+# Two columns need a polars-side cast before pydantic will accept them. The
+# no-raise guarantee covers bad VALUES, not bad TYPES: pydantic rejects these
+# outright, and the row would be quarantined rather than reach Silver.
+#
+# Each key is the SOURCE column, because the guard below tests `name in
+# df.columns`. RentsTransformer renames only 13 columns, so keying by model
+# field name silently skips any cast whose source kept its UPPERCASE name.
+#
+#   contract_registration_date: RentsTransformer emits Datetime and 748 of 4306
+#     stamps carry a non-midnight time, which Optional[date] rejects with
+#     date_from_datetime_inexact. START_DATE/END_DATE need no cast: all 4306
+#     are exactly midnight, which pydantic accepts as a date.
+#   PARKING: Int64, null in 4220 of 4306 rows, and bool rejects None. Aliased
+#     to has_parking so _project finds it under the model's field name.
+_CASTS = {
+    "contract_registration_date": pl.col("contract_registration_date").dt.date(),
+    "PARKING": pl.col("PARKING").fill_null(False).cast(pl.Boolean).alias("has_parking"),
+}
+
+
+_ROW_HASH_FIELDS = (
+    "area_name_en",
+    "ejari_property_sub_type_en",
+    "contract_start_date",
+    "annual_amount",
+    "actual_area",
+)
+
+
+def _row_hash(payload: dict) -> str:
+    """Stable fingerprint for cross-day dedup. Deliberately excludes RN, which
+    is the gateway's per-response ordinal and changes if rows are reordered."""
+    parts = [str(payload.get(f) or "") for f in _ROW_HASH_FIELDS]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+def _is_masked(value) -> bool:
+    """True for the upstream DLD word-mask: '??', '??????', '??? ??'.
+    The original bytes do not exist, so these are unrecoverable."""
+    return isinstance(value, str) and bool(value) and set(value) <= {"?", " "}
+
+
+def to_silver(df: pl.DataFrame) -> SilverContractResult:
+    """Validate every row. Never raises. Every input row lands in exactly one
+    of two disjoint buckets, so `len(frame) + len(quarantined) == df.height`:
+
+      frame       — constructed successfully. Keeps every value and carries its
+                    violations in the per-row column, so it stays fail-open
+                    (ADR-03).
+      quarantined — the raw source row pydantic could not build. Retained, not
+                    dropped, so a schema failure is auditable rather than a
+                    silent hole in the grain (ADR-02).
+    """
+    casts = [expr for name, expr in _CASTS.items() if name in df.columns]
+    if casts:
+        df = df.with_columns(casts)
+
+    records: list[dict] = []
+    failed: list[dict] = []
+    violations: dict[str, int] = {}
+
+    for source in df.iter_rows(named=True):
+        payload = _project(source)
+        for col in ARABIC_PARTIAL:
+            if _is_masked(payload.get(col)):
+                payload[col] = None
+                violations["masked_arabic_cell"] = violations.get("masked_arabic_cell", 0) + 1
+        payload["row_hash"] = _row_hash(payload)
+        payload["record_id"] = f"{payload['row_hash']}:{source.get('RN')}"
+        try:
+            contract = SilverRentContract(**payload)
+        except ValidationError as exc:
+            for err in exc.errors():
+                rule = f"schema:{err['loc'][0] if err['loc'] else 'row'}"
+                violations[rule] = violations.get(rule, 0) + 1
+            failed.append(source)
+            continue
+        for rule in contract.violations:
+            violations[rule] = violations.get(rule, 0) + 1
+        records.append(contract.model_dump())
+
+    return SilverContractResult(
+        frame=pl.DataFrame(records) if records else df.clear(),
+        quarantined=pl.DataFrame(failed) if failed else df.clear(),
+        groups=pl.DataFrame(),
+        violation_counts=violations,
+    )
 
