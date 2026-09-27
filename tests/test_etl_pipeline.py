@@ -498,6 +498,38 @@ class TestETLPipelineIntegration:
         assert "contract_id" not in written.columns, "CONTRACT_NUMBER is 100% null; alias removed"
         assert set(written.columns) == set(SilverRentContract.model_fields)
 
+    def test_transform_rents_does_not_swallow_a_broken_silver_import(self, tmp_path):
+        """The P0.3 incident was an IMPORT failure — a module-level NameError
+        that the old `except Exception` logged as 'Validation gate skipped' and
+        then returned True. Patching the module OBJECT, not the attribute,
+        intercepts the import itself, which is the path that actually broke.
+
+        `patch("lib.classes.silver_contract")` does NOT work here: it rebinds
+        the attribute on the `lib.classes` package, but `from X import Y` inside
+        a function resolves X through sys.modules, so the patch is bypassed and
+        the real module is imported. Poisoning the sys.modules entry is what
+        actually fails the import.
+        """
+        import sys
+        from unittest.mock import patch
+        import run_etl_pipeline
+
+        csv = tmp_path / "in.csv"
+        parquet = tmp_path / "out.parquet"
+        pl.DataFrame({
+            "AREA_EN": ["Dubai Marina"], "USAGE_EN": ["Residential"],
+            "ANNUAL_AMOUNT": [90000.0], "ACTUAL_AREA": [900.0],
+            "START_DATE": ["2026-09-20T00:00:00"], "END_DATE": ["2027-09-19T00:00:00"],
+        }).write_csv(csv)
+
+        # None in sys.modules is the standard "this import cannot be satisfied"
+        # state. Whether a module-level NameError surfaces as ImportError or as
+        # the original NameError is immaterial here: what is pinned is that the
+        # import is on the propagating path, not behind a swallow.
+        with patch.dict(sys.modules, {"lib.classes.silver_contract": None}):
+            with pytest.raises(ImportError):
+                run_etl_pipeline.transform_rents(str(csv), str(parquet))
+
     def test_transform_rents_does_not_swallow_a_broken_silver_contract(self, tmp_path):
         """The old code wrapped validation in except Exception and logged
         'Validation gate skipped', then returned True. That is how a module-level

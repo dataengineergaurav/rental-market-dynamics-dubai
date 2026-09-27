@@ -135,8 +135,18 @@ def transform_rents(input_csv: str, output_parquet: str) -> bool:
         import polars as pl
         from lib.classes.silver_contract import to_silver
 
-        result = to_silver(pl.read_parquet(output_parquet))
+        df = pl.read_parquet(output_parquet)
+        result = to_silver(df)
         logger.info(f"Silver contract: {len(result)} rows validated")
+        # len(result) is frame.height, so without this the summary can overstate:
+        # a quarantined row is absent from the count AND from the parquet, and
+        # the log is the operator's only view of that.
+        if len(result.quarantined):
+            logger.warning(
+                f"Silver quarantined {len(result.quarantined)} rows that could not be "
+                f"validated; they are NOT in {output_parquet}. "
+                f"Validated {len(result)} of {df.height} input rows."
+            )
         if result.violation_counts:
             top = sorted(result.violation_counts.items(), key=lambda kv: -kv[1])[:5]
             logger.info(f"Silver violations: {top}")
