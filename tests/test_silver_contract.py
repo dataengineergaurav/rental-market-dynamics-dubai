@@ -256,6 +256,16 @@ def test_to_silver_nulls_masked_arabic_cells():
     assert res.violation_counts.get("masked_arabic_cell", 0) == 1
 
 
+def test_rent_below_zero_is_a_violation_not_an_error():
+    """Per-row rent checks moved off validators.py; this asserts the coverage
+    did not disappear with them."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    res = to_silver(_frame(1, annual_amount=Decimal("-1")))
+    assert "annual_amount_not_positive" in res.violation_counts
+
+
 def test_unrecoverable_arabic_columns_are_documented_not_repaired():
     """The upstream DLD mask cannot be undone — the original bytes do not exist.
     So these columns are not 'dropped' by a step in to_silver; they are excluded

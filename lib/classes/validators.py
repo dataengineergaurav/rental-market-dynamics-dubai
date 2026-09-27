@@ -7,7 +7,6 @@ ensuring data quality and flagging anomalies specific to Dubai market.
 
 import logging
 from typing import Dict, List, Tuple, Optional
-from datetime import datetime, timedelta
 import polars as pl
 
 from lib.config import (
@@ -70,12 +69,13 @@ class RentContractValidator:
     """
     Validator for Dubai rent contract data.
     
-    Performs comprehensive validation including:
+    Aggregate checks only. Performs:
     - Required field checks
-    - Data type validation
-    - Range validation (rent amounts, sizes, dates)
-    - Business logic validation
+    - Date sanity (nulls, end after start, contract duration)
     - Outlier detection
+    
+    Per-row types and ranges (rent amounts, property sizes) are the Silver
+    contract's job — see lib/classes/silver_contract.py.
     """
     
     def __init__(self, strict_mode: bool = False):
@@ -112,12 +112,9 @@ class RentContractValidator:
         # Validate required fields
         self._validate_required_fields(df, result)
         
-        # Validate data types
-        self._validate_data_types(df, result)
-        
-        # Validate ranges
-        self._validate_rent_amounts(df, result)
-        self._validate_property_sizes(df, result)
+        # Per-row types and ranges are the Silver contract's job —
+        # see lib/classes/silver_contract.py. Kept here: schema presence,
+        # null rates, date sanity, outliers.
         self._validate_dates(df, result)
         
         # Validate business logic
@@ -154,86 +151,6 @@ class RentContractValidator:
                 else:
                     result.add_warning(msg)
                     
-    def _validate_data_types(self, df: pl.DataFrame, result: ValidationResult):
-        """Validate data types of numeric and date fields."""
-        # Check numeric fields
-        for field in DATA_QUALITY_RULES.get("numeric_fields", []):
-            if field not in df.columns:
-                continue
-                
-            # Try to identify non-numeric values
-            if df[field].dtype not in [pl.Int64, pl.Int32, pl.Float64, pl.Float32]:
-                result.add_warning(f"Field '{field}' is not numeric type: {df[field].dtype}")
-                
-    def _validate_rent_amounts(self, df: pl.DataFrame, result: ValidationResult):
-        """Validate rent amounts are within reasonable ranges."""
-        if "annual_amount" not in df.columns:
-            return
-            
-        min_rent = VALIDATION_THRESHOLDS["min_annual_rent"]
-        max_rent = VALIDATION_THRESHOLDS["max_annual_rent"]
-        
-        # Filter out nulls
-        valid_rents = df.filter(pl.col("annual_amount").is_not_null())
-        
-        if valid_rents.height == 0:
-            return
-            
-        # Check for negative or zero rents
-        invalid_rents = valid_rents.filter(pl.col("annual_amount") <= 0)
-        if invalid_rents.height > 0:
-            result.add_error(f"Found {invalid_rents.height:,} records with rent <= 0")
-            
-        # Check for rents below minimum
-        below_min = valid_rents.filter(pl.col("annual_amount") < min_rent)
-        if below_min.height > 0:
-            pct = (below_min.height / valid_rents.height) * 100
-            result.add_warning(
-                f"Found {below_min.height:,} records with rent < AED {min_rent:,} ({pct:.2f}%)"
-            )
-            
-        # Check for rents above maximum
-        above_max = valid_rents.filter(pl.col("annual_amount") > max_rent)
-        if above_max.height > 0:
-            pct = (above_max.height / valid_rents.height) * 100
-            result.add_warning(
-                f"Found {above_max.height:,} records with rent > AED {max_rent:,} ({pct:.2f}%)"
-            )
-            
-    def _validate_property_sizes(self, df: pl.DataFrame, result: ValidationResult):
-        """Validate property sizes are within reasonable ranges."""
-        if "actual_area" not in df.columns:
-            return
-            
-        min_size = VALIDATION_THRESHOLDS["min_property_size"]
-        max_size = VALIDATION_THRESHOLDS["max_property_size"]
-        
-        valid_sizes = df.filter(pl.col("actual_area").is_not_null())
-        
-        if valid_sizes.height == 0:
-            return
-            
-        # Check for invalid sizes
-        invalid_sizes = valid_sizes.filter(pl.col("actual_area") <= 0)
-        if invalid_sizes.height > 0:
-            result.add_error(f"Found {invalid_sizes.height:,} records with size <= 0")
-            
-        # Check for sizes below minimum
-        below_min = valid_sizes.filter(pl.col("actual_area") < min_size)
-        if below_min.height > 0:
-            pct = (below_min.height / valid_sizes.height) * 100
-            result.add_warning(
-                f"Found {below_min.height:,} records with size < {min_size} sqft ({pct:.2f}%)"
-            )
-            
-        # Check for sizes above maximum
-        above_max = valid_sizes.filter(pl.col("actual_area") > max_size)
-        if above_max.height > 0:
-            pct = (above_max.height / valid_sizes.height) * 100
-            result.add_warning(
-                f"Found {above_max.height:,} records with size > {max_size:,} sqft ({pct:.2f}%)"
-            )
-            
     def _validate_dates(self, df: pl.DataFrame, result: ValidationResult):
         """Validate date fields."""
         date_fields = DATA_QUALITY_RULES.get("date_fields", [])
