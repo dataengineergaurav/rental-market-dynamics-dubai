@@ -326,6 +326,84 @@ def _is_masked(value) -> bool:
     return isinstance(value, str) and bool(value) and set(value) <= {"?", " "}
 
 
+@dataclass
+class SilverContractGroup:
+    """One reconstructed multi-property contract.
+
+    `annual_amount` is CONTRACT-LEVEL and repeated on every member row, so it
+    is deduplicated — never summed. `total_area_sqft` IS per-property, so it is
+    summed. Getting this backwards overstates an 87-property block 87x.
+    """
+
+    group_id: str
+    start_date: Optional[date]
+    end_date: Optional[date]
+    version_en: Optional[str]
+    # DEDUPLICATED, NEVER SUMMED. This is the contract's total rent for the
+    # whole term, repeated verbatim on each of its property rows. It is NOT a
+    # per-property figure, so summing it over n properties overstates the money
+    # n-fold: the real 87-property block is AED 3,053,700, and sum() reports
+    # AED 265,671,900. `total_area_sqft` below is the opposite case and IS
+    # summed. If you are editing the aggregation, this is the line that must not
+    # become `block["annual_amount"].sum()`.
+    annual_amount: Decimal
+    total_properties: int
+    observed_property_count: int
+    # SUMMED. Per-property, like any other row-level measure.
+    total_area_sqft: Decimal
+    record_ids: list[str]
+    usages: list[str]
+    is_complete: bool
+
+
+# annual_amount is a key component, so a group cannot span two amounts: dedup is
+# structural here, not a runtime check that could be forgotten.
+_GROUP_KEY = ("contract_start_date", "contract_end_date", "annual_amount", "version_en")
+
+
+def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
+    """Reconstruct contract blocks for rows declaring more than one property.
+    CONTRACT_NUMBER is 100% null upstream, so the key is the best available
+    proxy: it reconstructs 82 of 84 declared blocks exactly on the real
+    payload. The 2 failures are two contracts sharing dates and amount, which
+    is irreducibly ambiguous without a contract number."""
+    if frame.height == 0 or "total_properties" not in frame.columns:
+        return pl.DataFrame()
+
+    multi = frame.filter(pl.col("total_properties") > 1)
+    if multi.height == 0:
+        return pl.DataFrame()
+
+    rows = []
+    for key, block in multi.group_by(list(_GROUP_KEY), maintain_order=True):
+        amounts = block["annual_amount"].unique().to_list()
+        declared = block["total_properties"][0]
+        observed = block.height
+        if len(amounts) != 1:
+            # amounts disagree inside one block: the key merged two contracts
+            declared = observed
+        rows.append(
+            {
+                "group_id": hashlib.sha256(
+                    "|".join(str(k) for k in key).encode("utf-8")
+                ).hexdigest()[:32],
+                "start_date": key[0],
+                "end_date": key[1],
+                "annual_amount": amounts[0] if len(amounts) == 1 else None,
+                "version_en": key[3],
+                "total_properties": declared,
+                "observed_property_count": observed,
+                "total_area_sqft": block["actual_area"].sum(),
+                "record_ids": block["record_id"].to_list(),
+                "usages": sorted(
+                    u for u in block["property_usage_en"].to_list() if u is not None
+                ),
+                "is_complete": observed == declared,
+            }
+        )
+    return pl.DataFrame(rows)
+
+
 def to_silver(df: pl.DataFrame) -> SilverContractResult:
     """Validate every row. Never raises. Every input row lands in exactly one
     of two disjoint buckets, so `len(frame) + len(quarantined) == df.height`:
@@ -365,10 +443,11 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
             violations[rule] = violations.get(rule, 0) + 1
         records.append(contract.model_dump())
 
+    frame = pl.DataFrame(records) if records else df.clear()
     return SilverContractResult(
-        frame=pl.DataFrame(records) if records else df.clear(),
+        frame=frame,
         quarantined=pl.DataFrame(failed) if failed else df.clear(),
-        groups=pl.DataFrame(),
+        groups=_rollup(frame),
         violation_counts=violations,
     )
 

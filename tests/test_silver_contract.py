@@ -437,3 +437,78 @@ def test_hash_part_treats_date_and_datetime_as_the_same_day():
     assert _hash_part(_date(2026, 9, 26)) == _hash_part(_datetime(2026, 9, 26))
     assert _hash_part(_date(2026, 9, 26)) == "2026-09-26"
     assert _hash_part(_datetime(2026, 9, 26, 23, 59, 59)) == "2026-09-26"
+
+
+def _block(n, **over):
+    rows = []
+    for _ in range(n):
+        r = _row(**over)
+        r["total_properties"] = n
+        rows.append(r)
+    return rows
+
+
+def test_rollup_reconstructs_a_declared_block():
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    res = to_silver(pl.DataFrame(_block(3)))
+    assert res.groups.height == 1
+    g = res.groups.row(0, named=True)
+    assert g["total_properties"] == 3
+    assert g["observed_property_count"] == 3
+    assert g["is_complete"] is True
+
+
+def test_rollup_never_sums_annual_amount():
+    """The 87-property block carries ONE distinct annual_amount repeated 87x.
+    Summing gives AED 265,671,900 instead of the real AED 3,053,700."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    rows = _block(87, annual_amount=Decimal("3053700"), actual_area=Decimal("20.03"))
+    res = to_silver(pl.DataFrame(rows))
+    g = res.groups.row(0, named=True)
+    assert g["annual_amount"] == Decimal("3053700")
+    assert g["annual_amount"] != Decimal("265671900")
+    assert g["total_area_sqft"] == Decimal("20.03") * 87
+
+
+def test_rollup_flags_partial_capture():
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    rows = _block(3)
+    res = to_silver(pl.DataFrame(rows[:1]))
+    g = res.groups.row(0, named=True)
+    assert g["total_properties"] == 3
+    assert g["observed_property_count"] == 1
+    assert g["is_complete"] is False
+
+
+def test_rollup_flags_merged_groups():
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    rows = _block(2) + _block(2)
+    for r in rows:
+        r["contract_start_date"] = date(2026, 9, 20)
+        r["contract_end_date"] = date(2027, 9, 19)
+        r["annual_amount"] = Decimal("43200")
+    res = to_silver(pl.DataFrame(rows))
+    g = res.groups.row(0, named=True)
+    assert g["observed_property_count"] == 4, "two 2-property contracts merged"
+    assert g["is_complete"] is False
+
+
+def test_group_frame_matches_the_declared_group_model():
+    """SilverContractGroup is the contract, but _rollup builds a dict by hand, so
+    nothing stops the two from drifting. Without this a renamed field would fail
+    as a missing column in a consumer, not here. Compared as a set: the two
+    order annual_amount and version_en differently."""
+    import polars as pl
+    from lib.classes.silver_contract import SilverContractGroup, to_silver
+
+    groups = to_silver(pl.DataFrame(_block(2))).groups
+    assert set(groups.columns) == set(SilverContractGroup.__dataclass_fields__)
+    assert groups.height == 1
