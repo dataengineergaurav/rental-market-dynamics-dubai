@@ -144,7 +144,6 @@ def test_output_schema_and_sort_order_are_stable():
     assert out.columns == PUBLISHED_COLUMNS
     assert out["area_name_en"].to_list() == ["Zabeel", "Al Satwa"]
 
-
 PUBLISHED_COLUMNS = [
     "area_name_en",
     "n",
@@ -154,37 +153,55 @@ PUBLISHED_COLUMNS = [
     "max_rent",
 ]
 
+# Must match the schema of output/area_median_index_20260913-17.csv, the published
+# artifact consumers already read. Asserted literally rather than by reading that
+# CSV, because .gitignore excludes **.csv and a test reading it would pass
+# vacuously in CI where the file does not exist. polars is unpinned in
+# pyproject.toml, and polars.DataFrame.equals() does NOT compare dtypes, so this
+# has to be asserted directly or a version bump moves a dtype silently.
+PUBLISHED_SCHEMA = {
+    "area_name_en": pl.String,
+    "n": pl.Int64,
+    "median_rent": pl.Float64,
+    "mean_rent": pl.Float64,
+    "min_rent": pl.Float64,
+    "max_rent": pl.Float64,
+}
 
-def test_empty_result_carries_the_published_schema():
-    """A caller doing pl.concat or a schema check must not break when nothing
-    survives. Every row here is Labor Camps, so the filter empties the frame and
-    the early return in build_area_median_index supplies the schema."""
-    out = build_area_median_index(pl.DataFrame(_rows(30, "Al Satwa", 55_000.0, "Labor Camps")))
-    assert out.height == 0
-    assert out.columns == PUBLISHED_COLUMNS
+
+def test_output_schema_matches_the_published_artifact():
+    """Names AND dtypes. pl.len() is UInt32 on polars 1.44.2 while the published
+    artifact's n is Int64, so the cast in build_area_median_index is load-bearing
+    and this test is what keeps it."""
+    rows = _spread(30, "Zabeel", 55_000.0, "Flat")
+    out = build_area_median_index(pl.DataFrame(rows))
+    assert out.schema == PUBLISHED_SCHEMA
+    assert out["n"].dtype == pl.Int64
 
 
-def test_all_rows_bulk_excluded_carries_the_published_schema():
-    """The other way to reach zero rows: a single 30-row identical group is all
-    bulk, so clean empties out before the group_by ever runs."""
+def test_empty_result_schema_matches_the_published_artifact():
+    """Same contract on the zero-row path, where the columns come from the agg
+    rather than from a literal schema."""
     out = build_area_median_index(pl.DataFrame(_rows(30, "Al Satwa", 55_000.0, "Flat")))
     assert out.height == 0
-    assert out.columns == PUBLISHED_COLUMNS
+    assert out.schema == PUBLISHED_SCHEMA
 
 
 def test_n_floor_dropping_every_area_keeps_the_published_schema():
     """Distinct amounts, so the filters all pass, but only 3 rows survive the
-    n >= 10 floor. Schema comes from the group_by, not the early return."""
+    n >= 10 floor. Third route to zero rows."""
     out = build_area_median_index(pl.DataFrame(_spread(3, "Al Satwa", 55_000.0, "Flat")))
     assert out.height == 0
-    assert out.columns == PUBLISHED_COLUMNS
+    assert out.schema == PUBLISHED_SCHEMA
 
 
 def test_zero_and_negative_rent_are_dropped():
     """annual_amount > 0 is a real branch in a publishing path: a zero-rent row
     would otherwise pull an area median toward zero."""
-    rows = _spread(30, "Al Satwa", 55_000.0, "Flat") + _rows(5, "Al Satwa", 0.0, "Flat") + _rows(
-        5, "Al Satwa", -9_000.0, "Flat"
+    rows = (
+        _spread(30, "Al Satwa", 55_000.0, "Flat")
+        + _rows(5, "Al Satwa", 0.0, "Flat")
+        + _rows(5, "Al Satwa", -9_000.0, "Flat")
     )
     out = build_area_median_index(pl.DataFrame(rows))
     assert out["n"][0] == 30
@@ -197,6 +214,7 @@ def test_plain_area_round_trips_through_concat():
     empty = build_area_median_index(pl.DataFrame(_rows(30, "Al Satwa", 55_000.0, "Flat")))
     both = pl.concat([kept, empty], how="vertical")
     assert both.height == 1
+    assert both.schema == PUBLISHED_SCHEMA
     assert both["area_name_en"][0] == "Al Satwa"
 
 
@@ -211,8 +229,12 @@ def test_plain_area_round_trips_through_concat():
         "Only 89 of 11,425 surviving rows (0.78%) exceed 1M, in groups of 1-8, so the "
         "count>10 bulk rule cannot reach them. Al Goze's 590k median is a 3,310 sqft "
         "Showroom, not Labor Camps, so the subtype exclusion is not the cause either. "
-        "This is why the test is xfail and not a widened band: if the gate is ever met, "
-        "strict mode turns the XPASS into a failure demanding the marker be removed."
+        "THIS IS A CANARY, NOT A MEASUREMENT: the frame below is hand-built with a "
+        "deliberate 12,610,000 row because .gitignore excludes **.csv so no real-data "
+        "fixture can be committed. It therefore CANNOT detect a regression in the real "
+        "121-area artifact, and it will never XPASS on its own. It records that the "
+        "gate is knowingly unmet; strict mode still turns a pass into a failure "
+        "demanding the marker be removed, so the assertion is not decorative."
     ),
 )
 def test_published_median_index_gate_from_implementation_plan_line_83():
