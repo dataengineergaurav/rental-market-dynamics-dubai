@@ -32,7 +32,12 @@ is_res = is_residential("Residential - Apartment")  # Returns True
 
 ### 2. Data Validation (`lib/classes/validators.py`)
 
-Comprehensive validation for rent contract data.
+**Aggregate** checks over a whole frame: required columns present, null rates per field, date
+sanity (end after start, duration in range), IQR outliers, empty frames.
+
+It does **not** range-check rents or property sizes per row — that is the Silver contract's job
+(section 2b). If you need "which row broke which rule", use `to_silver`; this module only ever
+answers "is this frame plausible".
 
 ```python
 import polars as pl
@@ -53,6 +58,38 @@ if result.is_valid:
 else:
     print(f"Found {len(result.errors)} errors")
 ```
+
+### 2b. Silver Contract (`lib/classes/silver_contract.py`)
+
+Per-row validation, coercion and derivation. Every input row lands in exactly one of two disjoint
+buckets, so `len(result.frame) + len(result.quarantined) == df.height` — nothing is dropped
+silently. `to_silver()` never raises: a bad cell keeps its value and is named in that row's
+`violations` list, and `violation_counts` tallies the rules.
+
+```python
+import polars as pl
+from lib.classes.silver_contract import to_silver
+
+df = pl.read_parquet("rent_contracts.parquet")
+result = to_silver(df)
+
+result.frame          # every row that constructed, with derived fields + violations
+result.quarantined    # raw source rows pydantic could not build (auditable, not dropped)
+result.groups         # reconstructed multi-property contract blocks
+result.violation_counts
+# {'actual_area_below_psf_floor': 3860, 'amount_duration_mismatch': 85,
+#  'annual_amount_below_min': 9, 'annual_amount_above_max': 1, ...}
+
+# which rows, not just how many
+(result.frame
+    .filter(pl.col("violations").list.len() > 0)
+    .select("record_id", "area_name_en", "annual_amount", "actual_area", "violations"))
+```
+
+Derived fields it adds: `duration_days`, `is_short_term`, `monthly_rent`, `rent_per_sqft` (null
+unless `actual_area >= 200`), `implied_years`, `psf_eligible`, `row_hash` (stable, for cross-day
+dedup) and `record_id` (unique within a file). This is the surface `run_etl_pipeline.py` runs, and
+the one `lib/classes/validators.py` defers to for types and ranges.
 
 ### 3. Market Analytics (`lib/classes/market_analytics.py`)
 
@@ -175,7 +212,8 @@ transformer = RentsTransformer(input_file="input.csv", output_file="output.parqu
 success: bool = transformer.transform()
 
 # Features:
-# - scan_csv (utf8-lossy) with schema_overrides for ANNUAL_AMOUNT/ACTUAL_AREA
+# - scan_csv (encoding="utf8", strict; polars also accepts "utf8-lossy")
+#   with schema_overrides for ANNUAL_AMOUNT/ACTUAL_AREA
 # - Parses REGISTRATION_DATE/START_DATE/END_DATE to datetime
 # - Adds canonical lowercase aliases (annual_amount, actual_area, area_name_en, ...)
 # - sink_parquet with zstd (see FILE_CONFIG)
@@ -194,7 +232,7 @@ from lib.transform.rents_transformer import RentsTransformer
 from lib.transform.enrichment import enrich_rent_contracts
 from lib.classes.property_usage import PropertyUsage
 from lib.classes.market_analytics import MarketAnalytics
-from lib.classes.validators import validate_rent_contracts
+from lib.classes.silver_contract import to_silver
 from lib.logging_helpers import configure_root_logger, get_logger
 
 # Configure logging
@@ -220,17 +258,24 @@ if not transformer.transform():
     logger.error("Transformation failed")
     exit(1)
 
-# Step 3: Enrich data
+# Step 3: Silver contract — per-row validation, derivation and keys
+silver = to_silver(pl.read_parquet(parquet_file))
+logger.info(f"Silver: {len(silver)} rows, violations={silver.violation_counts}")
+if len(silver.quarantined):
+    logger.warning(f"{len(silver.quarantined)} rows quarantined and NOT in the parquet")
+silver.frame.write_parquet(parquet_file)
+
+# Step 4: Enrich data
 df = pl.read_parquet(parquet_file)
 enriched_df = enrich_rent_contracts(df)
 enriched_file = f"output/rent_contracts_enriched_{date.today():%Y%m%d}.parquet"
 enriched_df.write_parquet(enriched_file)
 
-# Step 4: Generate property usage report
+# Step 5: Generate property usage report
 property_usage = PropertyUsage(f"output/property_usage_{date.today():%Y%m%d}.csv")
 property_usage.transform(enriched_file)
 
-# Step 5: Run market analytics
+# Step 6: Run market analytics
 analytics = MarketAnalytics(enriched_df)
 
 # Generate various reports
@@ -265,7 +310,11 @@ GH_TOKEN=your_github_token
 
 ### Validation Thresholds
 
-Customize validation thresholds in `lib/config.py`:
+Customize validation thresholds in `lib/config.py`. The rent and size bounds are read by the
+Silver contract's `_derive_and_collect` (`lib/classes/silver_contract.py:167`), not by
+`validators.py`; `psf_band_filter` reads the PSF bounds. `min_property_size` is the validity
+range, not the PSF floor — that is `PSF_MIN_AREA_SQFT` in `silver_contract.py`, deliberately a
+separate constant.
 
 ```python
 VALIDATION_THRESHOLDS = {
@@ -322,10 +371,11 @@ The enhanced library generates the following outputs:
 
 ## Best Practices
 
-1. **Always validate data** before analysis
+1. **Always run the Silver contract** before analysis — it is what applies `VALIDATION_THRESHOLDS`
+   per row and names the rule that fired
 2. **Enrich data** to enable advanced analytics
 3. **Use PSF metrics** for fair property comparisons
-4. **Filter outliers** using validation thresholds
+4. **Band-filter PSF** with `lib.config.psf_band_filter` before quoting a per-sqft figure
 5. **Track trends** over time for market insights
 6. **Segment by area tier** for targeted analysis
 
@@ -340,10 +390,14 @@ If validation fails, check:
 
 ### Missing Columns
 
-Some analytics require specific columns:
-- `actual_area` for PSF calculations
-- `registration_date` for trend analysis
-- `area_en` for area-based analysis
+Use the **canonical snake_case** names, not the UPPERCASE source names — `RentsTransformer` adds
+the lowercase aliases and everything downstream reads those:
+- `actual_area` and `annual_amount` for PSF calculations (`market_analytics.calculate_psf_metrics:55`)
+- `rent_per_sqft` for the Silver-derived PSF; `price_per_sqft` if you ran `enrich_rent_contracts`
+- `contract_start_date` for trend analysis (`market_analytics.calculate_rental_trends:277`; the
+  default `date_column`, override it)
+- `area_name_en` for area-based analysis — **not** `area_en`
+- `property_usage_en` for any PSF band filter; it is what `psf_band_filter` keys on
 
 ### Performance
 
