@@ -61,10 +61,10 @@ def test_model_constructs_from_a_silver_row():
 
 
 def test_field_on_a_leading_underscore_name_is_an_error():
-    """This is the exact form that broke BronzeRentContract: pydantic v2 rejects
-    Field() on a leading-underscore name at class-definition time. A bare default
-    or a bare annotation is accepted silently as a private attribute, which is why
-    only the Field() form raised."""
+    """The form that broke BronzeRentContract was Field(default_factory=...);
+    a plain Field(default=...) raises identically. Both are the loud form. A
+    bare default or a bare annotation is accepted silently as a private
+    attribute, which is why only the Field() form raised."""
     from pydantic import BaseModel, Field
 
     with pytest.raises(NameError, match="leading underscores"):
@@ -81,3 +81,18 @@ def test_shipped_model_declares_no_private_attributes():
 
     assert SilverRentContract.__private_attributes__ == {}
     assert SilverRentContract.model_fields["area_name_en"].is_required()
+
+
+def test_all_canonical_names_are_declared():
+    """A name present in the row payload but absent from the model is discarded
+    by extra='ignore' and surfaces later as an AttributeError far from the
+    omission. master_project_en is read by dim_project.sql:10,18,25."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    for name in (
+        "area_name_en", "annual_amount", "actual_area", "contract_start_date",
+        "property_usage_en", "project_name_en", "master_project_en",
+        "ejari_property_type_en", "ejari_property_sub_type_en",
+        "contract_registration_date", "contract_amount",
+    ):
+        assert name in SilverRentContract.model_fields, name

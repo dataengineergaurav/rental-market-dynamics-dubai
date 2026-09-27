@@ -7,6 +7,10 @@ is preserved.
 
 Units: ACTUAL_AREA is square FEET, confirmed by residential flats in the
 400-1200 band landing at ~80.6 AED/sqft. Never name an area field *_sqm.
+
+The model is frozen, so derived fields must be set with
+object.__setattr__(self, ...) inside mode="after" validators, never self.x = ...,
+which raises under frozen=True.
 """
 from datetime import date
 from decimal import Decimal
@@ -16,9 +20,9 @@ from pydantic import BaseModel, ConfigDict
 
 # Upstream DLD emits word-length '?' masks for enum-lookup Arabic columns, not
 # mojibake. The original bytes do not exist, so these are dropped, not repaired.
-ARABIC_DROPPED = ("VERSION_AR", "IS_FREE_HOLD_AR", "MASTER_PROJECT_AR")
+ARABIC_DROPPED: tuple[str, ...] = ("VERSION_AR", "IS_FREE_HOLD_AR", "MASTER_PROJECT_AR")
 
-dropped_columns = {
+dropped_columns: dict[str, str] = {
     "TOTAL": "constant batch metadata (single distinct value), not per-row",
     "DEFAULT_SORT": "query echo, not data",
     "AREA_ID": "single distinct value 0 across all rows",
@@ -33,6 +37,8 @@ dropped_columns = {
     "VERSION_AR": "100% upstream '?' mask, unrecoverable",
     "IS_FREE_HOLD_AR": "100% upstream '?' mask, unrecoverable",
     "IS_FREE_HOLD_EN": "is_free_hold bool is authoritative (1:1 verified)",
+    # MASTER_PROJECT_EN: the CSV column is 100% null, but the snake_case field
+    # is still declared on the model because dim_project.sql:10 reads it.
     "MASTER_PROJECT_EN": "100% null upstream",
     "MASTER_PROJECT_AR": "100% null upstream",
 }
@@ -67,6 +73,7 @@ class SilverRentContract(BaseModel):
 
     # project
     project_name_en: Optional[str] = None
+    master_project_en: Optional[str] = None
     project_ar: Optional[str] = None
 
     # contract facts
