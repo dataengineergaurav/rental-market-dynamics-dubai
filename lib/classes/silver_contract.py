@@ -36,7 +36,10 @@ DAYS_PER_YEAR = Decimal("365.25")
 ARABIC_DROPPED: tuple[str, ...] = ("VERSION_AR", "IS_FREE_HOLD_AR", "MASTER_PROJECT_AR")
 
 dropped_columns: dict[str, str] = {
-    "TOTAL": "constant batch metadata (single distinct value), not per-row",
+    # TOTAL is constant WITHIN a daily file and differs BETWEEN files: 5
+    # distinct values over the 5 files (1714/886/4589/4580/4306), each equal
+    # to that file's row count. "Single distinct value" is false across files.
+    "TOTAL": "per-response batch count, constant within a file, not per-row",
     "DEFAULT_SORT": "query echo, not data",
     "AREA_ID": "single distinct value 0 across all rows",
     "EJARI_PROPERTY_TYPE_ID": "single distinct value 0 across all rows",
@@ -56,7 +59,12 @@ dropped_columns: dict[str, str] = {
     # late non-null values are what broke pl.DataFrame's 100-row schema
     # inference; see to_silver.
     "MASTER_PROJECT_EN": "near-total null upstream, never 100%",
-    "MASTER_PROJECT_AR": "100% null upstream",
+    # MASTER_PROJECT_AR: near-total null upstream, but NOT 100% — 4 non-empty
+    # of 16075 rows across the five daily files: 'جنات ' (x2), 'هيلز بارك',
+    # 'رمرام - الرمث'. Same 1 on 20260913 / 3 on 20260916 split as EN. Unlike
+    # VERSION_AR and IS_FREE_HOLD_AR this is NOT a '?' mask, so it is listed in
+    # ARABIC_DROPPED as near-empty, not as unrecoverable text.
+    "MASTER_PROJECT_AR": "near-total null upstream, never 100%",
 }
 
 
