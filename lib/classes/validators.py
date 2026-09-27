@@ -6,14 +6,12 @@ ensuring data quality and flagging anomalies specific to Dubai market.
 """
 
 import logging
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List
 import polars as pl
 
 from lib.config import (
     VALIDATION_THRESHOLDS,
     DATA_QUALITY_RULES,
-    is_residential,
-    is_commercial,
 )
 
 logger = logging.getLogger(__name__)

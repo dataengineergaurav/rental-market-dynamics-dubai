@@ -192,12 +192,6 @@ DATA_QUALITY_RULES = {
         "annual_amount",
     ],
     
-    "numeric_fields": [
-        "annual_amount",
-        "contract_amount",
-        "no_of_prop",
-    ],
-    
     "date_fields": [
         "contract_start_date",
         "contract_end_date",
