@@ -304,10 +304,12 @@ def test_no_row_is_ever_discarded():
 
 
 def test_row_hash_is_stable_across_runs():
+    import polars as pl
+
     from lib.classes.silver_contract import to_silver
 
-    a = to_silver(_frame(1)).frame["row_hash"][0]
-    b = to_silver(_frame(1)).frame["row_hash"][0]
+    a = to_silver(pl.DataFrame([{**_row(), "RN": 1}])).frame["row_hash"][0]
+    b = to_silver(pl.DataFrame([{**_row(), "RN": 999}])).frame["row_hash"][0]
     assert a == b, "row_hash must not depend on RN or row order"
 
 
@@ -399,8 +401,8 @@ def test_row_hash_is_agnostic_to_numeric_type():
 
 def test_frame_carries_the_full_model_schema():
     """The model is the contract, so the frame must carry every declared field
-    plus the two derived keys — 37 columns. Catches a field added to the model
-    but dropped before the frame."""
+    plus the two derived keys. Catches a field added to the model but dropped
+    before the frame."""
     import polars as pl
     from lib.classes.silver_contract import SilverRentContract, to_silver
 
@@ -411,4 +413,27 @@ def test_frame_carries_the_full_model_schema():
     })
     frame = to_silver(df).frame
     assert set(frame.columns) == set(SilverRentContract.model_fields)
-    assert frame.width == 37
+    assert frame.width == len(SilverRentContract.model_fields)
+
+
+def test_hash_part_never_raises_on_bool():
+    """bool subclasses int, so without a guard it routes into Decimal(str(True))
+    and raises InvalidOperation — outside to_silver's try block, which would
+    break the never-raises contract."""
+    from lib.classes.silver_contract import _hash_part
+
+    assert _hash_part(True) == "True"
+    assert _hash_part(False) == "False"
+    assert _hash_part(0) == "0", "int 0 must still be '0', not 'False'"
+
+
+def test_hash_part_treats_date_and_datetime_as_the_same_day():
+    """The model coerces both to Optional[date], so one contract must not get
+    two hashes. datetime is a subclass of date, so it must be checked first."""
+    from datetime import date as _date, datetime as _datetime
+
+    from lib.classes.silver_contract import _hash_part
+
+    assert _hash_part(_date(2026, 9, 26)) == _hash_part(_datetime(2026, 9, 26))
+    assert _hash_part(_date(2026, 9, 26)) == "2026-09-26"
+    assert _hash_part(_datetime(2026, 9, 26, 23, 59, 59)) == "2026-09-26"

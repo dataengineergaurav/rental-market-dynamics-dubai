@@ -13,7 +13,7 @@ object.__setattr__(self, ...) inside mode="after" validators, never self.x = ...
 which raises under frozen=True.
 """
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import hashlib
 from typing import Optional
@@ -122,12 +122,12 @@ class SilverRentContract(BaseModel):
     #               registrations collapse, 4306 rows -> 3378 values.
     #   record_id — UNIQUE within a file. It appends RN, the gateway's
     #               per-response ordinal, so it reaches full cardinality but
-    #               breaks if a re-fetch RENUMBERS RN (verified: 928 of 4306
-    #               rows change id). Reordering rows alone is harmless, since
-    #               RN travels with its row. With no RN column at all every id
-    #               ends in ':None' and collides by design, which is correct:
-    #               row_hash is the fallback for those. Cross-day use must key
-    #               on row_hash.
+    #               breaks if a re-fetch RENUMBERS RN (verified: all 4306 of
+    #               4306 rows change id). Reordering rows alone is harmless,
+    #               since RN travels with its row. With no RN column at all
+    #               every id ends in ':None' and collides by design, which is
+    #               correct: row_hash is the fallback for those. Cross-day use
+    #               must key on row_hash.
     row_hash: Optional[str] = None
     record_id: Optional[str] = None
 
@@ -289,9 +289,21 @@ def _hash_part(value) -> str:
     this the same contract hashes differently depending on the caller's numeric
     type, which would break cross-day dedup. 0 and 0.0 are distinct from absent:
     `or ''` would fold them together.
+
+    bool is tested before the numeric branch because it subclasses int, and
+    Decimal(str(True)) raises InvalidOperation. That would escape to_silver's
+    try block, which catches only ValidationError, and break the never-raises
+    contract. datetime is tested before date because it subclasses date: the
+    model coerces both to Optional[date], so one contract must not hash two ways.
     """
     if value is None:
         return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, (int, float, Decimal)):
         return format(Decimal(str(value)).normalize(), "f")
     return str(value).strip()
