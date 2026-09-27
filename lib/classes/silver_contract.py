@@ -361,12 +361,18 @@ class SilverContractGroup:
 _GROUP_KEY = ("contract_start_date", "contract_end_date", "annual_amount", "version_en")
 
 
-def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
+def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
     """Reconstruct contract blocks for rows declaring more than one property.
     CONTRACT_NUMBER is 100% null upstream, so the key is the best available
     proxy: it reconstructs 82 of 84 declared blocks exactly on the real
     payload. The 2 failures are two contracts sharing dates and amount, which
-    is irreducibly ambiguous without a contract number."""
+    is irreducibly ambiguous without a contract number.
+
+    Adds to `violations` as a side effect — a key that merges two contracts
+    (observed > declared) contributes its whole row count to
+    `merged_contract_group`, so the problem is visible in violation_counts and
+    not only as is_complete=False on the group. Those rows are flagged, never
+    dropped."""
     if frame.height == 0 or "total_properties" not in frame.columns:
         return pl.DataFrame()
 
@@ -376,12 +382,15 @@ def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
 
     rows = []
     for key, block in multi.group_by(list(_GROUP_KEY), maintain_order=True):
-        amounts = block["annual_amount"].unique().to_list()
         declared = block["total_properties"][0]
         observed = block.height
-        if len(amounts) != 1:
-            # amounts disagree inside one block: the key merged two contracts
-            declared = observed
+        # annual_amount is a _GROUP_KEY member, so it CANNOT disagree inside a
+        # group. Do not add a len(amounts) != 1 branch: it is unreachable, and
+        # merging two contracts is detected by observed != declared below.
+        if observed != declared:
+            violations["merged_contract_group"] = violations.get(
+                "merged_contract_group", 0
+            ) + observed
         rows.append(
             {
                 "group_id": hashlib.sha256(
@@ -389,14 +398,18 @@ def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
                 ).hexdigest()[:32],
                 "start_date": key[0],
                 "end_date": key[1],
-                "annual_amount": amounts[0] if len(amounts) == 1 else None,
+                # CONTRACT-LEVEL, repeated per member row. Deduplicated, never
+                # summed: the 87-property block carries one value, and summing
+                # it would report AED 265,671,900 instead of AED 3,053,700.
+                "annual_amount": block["annual_amount"][0],
                 "version_en": key[3],
                 "total_properties": declared,
                 "observed_property_count": observed,
                 "total_area_sqft": block["actual_area"].sum(),
                 "record_ids": block["record_id"].to_list(),
+                # a set of categories, not one entry per property row
                 "usages": sorted(
-                    u for u in block["property_usage_en"].to_list() if u is not None
+                    {u for u in block["property_usage_en"].to_list() if u is not None}
                 ),
                 "is_complete": observed == declared,
             }
@@ -447,7 +460,7 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
     return SilverContractResult(
         frame=frame,
         quarantined=pl.DataFrame(failed) if failed else df.clear(),
-        groups=_rollup(frame),
+        groups=_rollup(frame, violations),
         violation_counts=violations,
     )
 

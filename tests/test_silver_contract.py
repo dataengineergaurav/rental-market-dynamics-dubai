@@ -512,3 +512,33 @@ def test_group_frame_matches_the_declared_group_model():
     groups = to_silver(pl.DataFrame(_block(2))).groups
     assert set(groups.columns) == set(SilverContractGroup.__dataclass_fields__)
     assert groups.height == 1
+
+
+def test_usages_is_a_deduplicated_category_set():
+    """usages names categories, not properties. The 87-property block must not
+    carry 'Residential' 87 times."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    res = to_silver(pl.DataFrame(_block(87, property_usage_en="Residential")))
+    # Series[0] on a List column returns a Series, not a list, so compare the
+    # materialised column. Equality against a 1-element list is also the
+    # "length 1, not 87" claim: 87 copies would not satisfy it.
+    assert res.groups["usages"].to_list() == [["Residential"]]
+
+
+def test_merged_group_is_counted_in_violation_counts():
+    """Two genuinely distinct contracts sharing start, end, amount and version
+    are irreducibly ambiguous without a contract number. They must be flagged
+    and counted, never dropped."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    rows = _block(2) + _block(2)
+    for r in rows:
+        r["contract_start_date"] = date(2026, 9, 20)
+        r["contract_end_date"] = date(2027, 9, 19)
+        r["annual_amount"] = Decimal("43200")
+    res = to_silver(pl.DataFrame(rows))
+    assert res.groups["observed_property_count"][0] == 4
+    assert res.violation_counts.get("merged_contract_group") == 4
