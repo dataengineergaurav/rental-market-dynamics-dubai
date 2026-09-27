@@ -267,7 +267,7 @@ class SilverRentContract(BaseModel):
     property_sub_type_ar: Optional[str] = None
     property_usage_ar: Optional[str] = None
     rooms: Optional[int] = None
-    actual_area: Decimal = Field(ge=0)
+    actual_area: Decimal
     has_parking: bool = False
 
     # project
@@ -280,10 +280,21 @@ class SilverRentContract(BaseModel):
     contract_end_date: Optional[date] = None
     version_en: Optional[str] = None
     is_free_hold: bool = False
-    annual_amount: Decimal = Field(ge=0)
+    # No pydantic bounds on the numeric fields. A bound like Field(ge=0) rejects
+    # the value BEFORE mode="after" runs, so _derive_and_collect never sees it
+    # and the precise violation name is lost — a -1 rent would be reported as a
+    # generic schema error instead of annual_amount_not_positive. All range
+    # checking lives in one place: _derive_and_collect.
+    annual_amount: Decimal
     contract_amount: Optional[Decimal] = None
+    actual_area: Decimal
     total_properties: int = 1
 ```
+
+**Do not add `ge=`, `gt=`, `lt=` or `le=` to any numeric field on this model.** The violation
+names in `_derive_and_collect` are the contract's diagnostics; a pydantic bound short-circuits them
+into an opaque schema error and makes the `actual_area_negative` and `annual_amount_not_positive`
+branches unreachable.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -632,6 +643,51 @@ class SilverContractResult:
         return self.frame.height
 ```
 
+**The source-column map is not optional.** `RentsTransformer` aliases only 13 columns to
+snake_case. The other 16 model fields exist only under their original UPPERCASE names — verified
+against a real transformer output (57 columns), where `total_properties`, `is_free_hold`,
+`version_en`, `rooms`, `has_parking` and all eight `*_ar` fields have no snake_case source. A plain
+`if k in _MODEL_FIELDS` filter therefore silently defaults every one of them, which makes
+`total_properties` always 1 and kills the Task 6 rollup outright.
+
+```python
+# model field -> source column. Canonical snake_case first (added by
+# RentsTransformer's alias step), then the original UPPERCASE column.
+_SOURCE_COLUMNS = {
+    "total_properties": ("total_properties", "TOTAL_PROPERTIES"),
+    "is_free_hold": ("is_free_hold", "IS_FREE_HOLD"),
+    "version_en": ("version_en", "VERSION_EN"),
+    "rooms": ("rooms", "ROOMS"),
+    "has_parking": ("has_parking", "PARKING"),
+    "area_name_ar": ("area_name_ar", "AREA_AR"),
+    "property_usage_ar": ("property_usage_ar", "USAGE_AR"),
+    "property_type_ar": ("property_type_ar", "PROP_TYPE_AR"),
+    "property_sub_type_ar": ("property_sub_type_ar", "PROP_SUB_TYPE_AR"),
+    "project_ar": ("project_ar", "PROJECT_AR"),
+    "nearest_metro_en": ("nearest_metro_en", "NEAREST_METRO_EN"),
+    "nearest_mall_en": ("nearest_mall_en", "NEAREST_MALL_EN"),
+    "nearest_landmark_en": ("nearest_landmark_en", "NEAREST_LANDMARK_EN"),
+    "nearest_metro_ar": ("nearest_metro_ar", "NEAREST_METRO_AR"),
+    "nearest_mall_ar": ("nearest_mall_ar", "NEAREST_MALL_AR"),
+    "nearest_landmark_ar": ("nearest_landmark_ar", "NEAREST_LANDMARK_AR"),
+    "row_hash": ("row_hash",),
+    "record_id": ("record_id",),
+}
+# canonical snake_case names that need no mapping
+_MODEL_FIELDS = frozenset(SilverRentContract.model_fields)
+
+
+def _project(source: dict) -> dict:
+    """Map one raw row onto the model's field names."""
+    out = {}
+    for field in _MODEL_FIELDS:
+        for candidate in _SOURCE_COLUMNS.get(field, (field,)):
+            if candidate in source:
+                out[field] = source[candidate]
+                break
+    return out
+```
+
 ```python
 def _is_masked(value) -> bool:
     """True for the upstream DLD word-mask: '??', '??????', '??? ??'.
@@ -642,48 +698,51 @@ def _is_masked(value) -> bool:
 def to_silver(df: pl.DataFrame) -> SilverContractResult:
     """Validate every row. Never raises: rows that fail hard rules land in
     `quarantined` (retained, not dropped) and every fired rule is counted."""
-    cols = set(df.columns)
     records: list[dict] = []
     violations: dict[str, int] = {}
-    quarantined = 0
 
     for source in df.iter_rows(named=True):
-        payload = {k: v for k, v in source.items() if k in _MODEL_FIELDS}
+        payload = _project(source)
         for col in ARABIC_PARTIAL:
             if _is_masked(payload.get(col)):
                 payload[col] = None
                 violations["masked_arabic_cell"] = violations.get("masked_arabic_cell", 0) + 1
+        payload["row_hash"] = _row_hash(payload)
+        payload["record_id"] = f"{payload['row_hash']}:{source.get('RN')}"
         try:
             contract = SilverRentContract(**payload)
         except ValidationError as exc:
-            quarantined += 1
             for err in exc.errors():
                 rule = f"schema:{err['loc'][0] if err['loc'] else 'row'}"
                 violations[rule] = violations.get(rule, 0) + 1
             continue
         for rule in contract.violations:
             violations[rule] = violations.get(rule, 0) + 1
-        if contract.violations:
-            quarantined += 1
         records.append(contract.model_dump())
 
     frame = pl.DataFrame(records) if records else df.clear()
+    flagged = (
+        frame.filter(pl.col("violations").list.len() > 0)
+        if "violations" in frame.columns
+        else frame.clear()
+    )
     return SilverContractResult(
         frame=frame,
-        quarantined=frame.head(0) if quarantined == 0 else frame.filter(
-            pl.col("violations").list.len() > 0
-        ),
+        quarantined=flagged,
         groups=pl.DataFrame(),
         violation_counts=violations,
     )
 ```
 
-Add the imports `from dataclasses import dataclass`, `import polars as pl`, and
-`from pydantic import ValidationError`, plus a module-level field set built after the class:
+Add the imports `from dataclasses import dataclass`, `import polars as pl`, `hashlib`, and
+`from pydantic import ValidationError`.
 
-```python
-_MODEL_FIELDS = frozenset(SilverRentContract.model_fields)
-```
+**Two forward references this task must not leave dangling.** `_row_hash` and `_rollup` are
+specified in Tasks 5 and 6, but `to_silver` calls both. Define `_row_hash` and `_ROW_HASH_FIELDS`
+in this task's Step 3 as shown in Task 5 Step 3, and leave `groups=pl.DataFrame()` as an empty
+placeholder — Task 6 replaces that one line with `groups=_rollup(frame)` and adds the `_rollup`
+function. Do not call a name this task has not defined; the test suite must be green at the end of
+every task.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -764,7 +823,7 @@ Expected: FAIL — no `row_hash` column
 
 - [ ] **Step 3: Add the key derivation**
 
-Add `import hashlib` to the imports. Add two fields to the model:
+Add `import hashlib` to the imports if not already present. Add two fields to the model:
 
 ```python
     # keys — row_hash is stable across re-runs, record_id is unique in-file
@@ -791,12 +850,9 @@ def _row_hash(payload: dict) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 ```
 
-In `to_silver`, inside the row loop, set both before constructing:
-
-```python
-        payload["row_hash"] = _row_hash(payload)
-        payload["record_id"] = f"{payload['row_hash']}:{source.get('RN')}"
-```
+**If Task 4 already defined `_row_hash` and `_ROW_HASH_FIELDS` (per its Step 3 note), this task is
+only the two model fields plus the `_SOURCE_COLUMNS` entries for `row_hash` and `record_id` — skip
+re-adding the helper.**
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1040,40 +1096,34 @@ Append to `tests/test_etl_pipeline.py`, inside `class TestETLPipelineIntegration
 
 ```python
     def test_transform_rents_runs_the_silver_contract(self, tmp_path):
-        """transform_rents must invoke to_silver and log its summary."""
+        """transform_rents must run to_silver and rewrite the parquet.
+
+        RentsTransformer is stubbed to do a real CSV -> parquet write, so
+        read_parquet and write_parquet are NOT patched. Asserting on a patched
+        DataFrame.write_parquet would only see the path string, not the frame.
+        """
         import polars as pl
         from unittest.mock import patch
         import run_etl_pipeline
+        from lib.transform.rents_transformer import RentsTransformer
 
         csv = tmp_path / "rent_contracts_20260917.csv"
         parquet = tmp_path / "rent_contracts_20260917.parquet"
-
-        real = pl.read_csv(
+        pl.read_csv(
             'output/rent_contracts_20260917.csv', n_rows=50, null_values=[''],
             ignore_errors=True,
             schema_overrides={'ANNUAL_AMOUNT': pl.Float64, 'ACTUAL_AREA': pl.Float64},
-        )
-        csv.write_csv(csv)
-        renamed = real.rename({
-            'USAGE_EN': 'property_usage_en', 'AREA_EN': 'area_name_en',
-            'PROP_TYPE_EN': 'ejari_property_type_en',
-            'PROP_SUB_TYPE_EN': 'ejari_property_sub_type_en',
-            'START_DATE': 'contract_start_date', 'END_DATE': 'contract_end_date',
-            'VERSION_EN': 'version_en',
-        })
+        ).write_csv(csv)
 
-        with patch.object(run_etl_pipeline, 'RentsTransformer') as T:
-            T.return_value.transform.return_value = True
-            with patch('polars.read_parquet', return_value=renamed), \
-                 patch('polars.DataFrame.write_parquet') as write:
-                ok = run_etl_pipeline.transform_rents(str(csv), str(parquet))
-
+        ok = run_etl_pipeline.transform_rents(str(csv), str(parquet))
         assert ok is True
+
         # spec gate 8: the written frame keeps 1 row per input row (ADR-02)
-        assert write.call_count == 1
-        written = write.call_args[0][0]
-        assert written.height == renamed.height
-        assert written['record_id'].n_unique() == renamed.height
+        assert parquet.exists(), "transform_rents must rewrite the parquet in place"
+        written = pl.read_parquet(parquet)
+        assert written.height == 50
+        assert written['record_id'].n_unique() == 50
+        assert 'violations' in written.columns
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1380,6 +1430,7 @@ import polars as pl
 
 
 def _rows(n, area, amount, sub_type, area_sqft=500.0):
+    """n rows sharing one (area, amount) pair — this is what trips the bulk filter."""
     return [
         {
             "area_name_en": area,
@@ -1391,22 +1442,48 @@ def _rows(n, area, amount, sub_type, area_sqft=500.0):
     ]
 
 
+def _spread(n, area, amount, sub_type, step=100.0, area_sqft=500.0):
+    """n rows spread over distinct amounts, so no (area, amount) group exceeds
+    10. A legitimate area with many units looks like this; a bulk filing does not."""
+    return [
+        {
+            "area_name_en": area,
+            "annual_amount": amount + i * step,
+            "actual_area": area_sqft,
+            "ejari_property_sub_type_en": sub_type,
+        }
+        for i in range(n)
+    ]
+
+
 def test_bulk_block_is_excluded_from_the_median():
     """Naif-style bulk: 87 identical rows at AED 1.54M. Unfiltered, this drags
     mean_rent to 8x the median and pushes max_rent past 1M."""
     from lib.analysis.gold_indexes import build_area_median_index
 
-    rows = _rows(87, "Naif", 1_540_471.0, "Hotel") + _rows(40, "Naif", 60_000.0, "Flat")
+    rows = _rows(87, "Naif", 1_540_471.0, "Hotel") + _spread(40, "Naif", 60_000.0, "Flat")
     out = build_area_median_index(pl.DataFrame(rows))
     assert out["median_rent"][0] == 60_000.0
     assert out["max_rent"][0] <= 1_000_000
+
+
+def test_legitimate_area_survives_the_bulk_filter():
+    """A real area with many units must NOT be mistaken for a bulk filing, so
+    its amounts must be spread across groups of at most 10."""
+    from lib.analysis.gold_indexes import build_area_median_index
+
+    rows = _spread(40, "Dubai Marina", 90_000.0, "Flat")
+    out = build_area_median_index(pl.DataFrame(rows))
+    assert out.height == 1
+    assert out["area_name_en"][0] == "Dubai Marina"
+    assert out["n"][0] == 40
 
 
 def test_labor_camps_are_excluded():
     """IMPLEMENTATION_PLAN.md:46 excludes Hotel / Labor Camps / Virtual Unit."""
     from lib.analysis.gold_indexes import build_area_median_index
 
-    rows = _rows(30, "Al Goze Industrial Second", 590_000.0, "Labor Camps")
+    rows = _spread(30, "Al Goze Industrial Second", 590_000.0, "Labor Camps")
     out = build_area_median_index(pl.DataFrame(rows))
     assert out.height == 0, "Labor Camps must not reach the index"
 
@@ -1414,7 +1491,7 @@ def test_labor_camps_are_excluded():
 def test_every_emitted_area_has_n_at_least_10():
     from lib.analysis.gold_indexes import build_area_median_index
 
-    rows = _rows(40, "Dubai Marina", 90_000.0, "Flat") + _rows(3, "Al Satwa", 55_000.0, "Flat")
+    rows = _spread(40, "Dubai Marina", 90_000.0, "Flat") + _rows(3, "Al Satwa", 55_000.0, "Flat")
     out = build_area_median_index(pl.DataFrame(rows))
     assert out.filter(pl.col("n") < 10).height == 0
     assert "Dubai Marina" in out["area_name_en"].to_list()
@@ -1424,7 +1501,7 @@ def test_every_emitted_area_has_n_at_least_10():
 def test_median_within_plausible_dubai_band():
     from lib.analysis.gold_indexes import build_area_median_index
 
-    rows = _rows(50, "Dubai Marina", 120_000.0, "Flat")
+    rows = _spread(50, "Dubai Marina", 120_000.0, "Flat")
     out = build_area_median_index(pl.DataFrame(rows))
     assert 20_000 <= out["median_rent"][0] <= 500_000
 ```
