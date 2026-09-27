@@ -177,18 +177,10 @@ def test_model_forbids_leading_underscore_fields():
 
 
 def test_area_is_square_feet_not_square_metres():
-    """Guards the 10.76x corruption. Spec gate 5: residential flats in the
-    400-1200 sqft band must land at 60-120 AED/sqft. Read as m2 the same
-    figures become 868 AED/sqft, roughly 10x market."""
-    from lib.classes.silver_contract import SilverRentContract
-
-    c = SilverRentContract(**_row(annual_amount=Decimal("60000"), actual_area=Decimal("744")))
-    assert c.psf_eligible is True
-    assert Decimal("60") <= c.rent_per_sqft <= Decimal("120"), (
-        f"rent_per_sqft {c.rent_per_sqft} outside 60-120; unit is not sqft"
-    )
-    # the same number read as m2 would be 10.76x higher
-    assert c.rent_per_sqft * Decimal("10.7639") > Decimal("800")
+    """NOT IN THIS TASK. `rent_per_sqft` and `psf_eligible` are Task 3's derived
+    fields, so the m2/sqft guard cannot be asserted until they exist. The test
+    lives in Task 3 (`test_rent_per_sqft_lands_in_the_dubai_market_band`),
+    where the division that would carry the 10.76x error actually happens."""
 ```
 
 Add `import pytest` to the top of the test file.
@@ -287,9 +279,11 @@ class SilverRentContract(BaseModel):
     # checking lives in one place: _derive_and_collect.
     annual_amount: Decimal
     contract_amount: Optional[Decimal] = None
-    actual_area: Decimal
     total_properties: int = 1
 ```
+
+`actual_area` is declared once, in the `# property` block above. Do not repeat it here — a second
+declaration is silently overridden by pydantic and reads as a copy-paste slip.
 
 **Do not add `ge=`, `gt=`, `lt=` or `le=` to any numeric field on this model.** The violation
 names in `_derive_and_collect` are the contract's diagnostics; a pydantic bound short-circuits them
@@ -403,6 +397,23 @@ def test_no_psf_below_200_sqft():
 
     assert SilverRentContract(**_row(actual_area=Decimal("199"))).rent_per_sqft is None
     assert SilverRentContract(**_row(actual_area=Decimal("1000"))).psf_eligible is True
+
+
+def test_rent_per_sqft_lands_in_the_dubai_market_band():
+    """Guards the 10.76x m2/sqft corruption, at the point the division happens.
+    Spec gate 5: residential flats in the 400-1200 sqft band must land at
+    60-120 AED/sqft. Read as m2 the same figures become 868 AED/sqft, roughly
+    10x market. Moved here from Task 2, where rent_per_sqft did not yet exist."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    c = SilverRentContract(
+        **_row(annual_amount=Decimal("60000"), actual_area=Decimal("744"))
+    )
+    assert c.psf_eligible is True
+    assert Decimal("60") <= c.rent_per_sqft <= Decimal("120"), (
+        f"rent_per_sqft {c.rent_per_sqft} outside 60-120; the unit is not sqft"
+    )
+    assert c.rent_per_sqft * Decimal("10.7639") > Decimal("800")
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
