@@ -50,9 +50,12 @@ dropped_columns: dict[str, str] = {
     "VERSION_AR": "100% upstream '?' mask, unrecoverable",
     "IS_FREE_HOLD_AR": "100% upstream '?' mask, unrecoverable",
     "IS_FREE_HOLD_EN": "is_free_hold bool is authoritative (1:1 verified)",
-    # MASTER_PROJECT_EN: the CSV column is 100% null, but the snake_case field
-    # is still declared on the model because dim_project.sql:10 reads it.
-    "MASTER_PROJECT_EN": "100% null upstream",
+    # MASTER_PROJECT_EN: near-total null upstream, but NOT 100% — 3 of 4580
+    # rows on 20260916 and 1 of 1714 on 20260913 carry a value. The field is
+    # still declared on the model because dim_project.sql:10 reads it, and the
+    # late non-null values are what broke pl.DataFrame's 100-row schema
+    # inference; see to_silver.
+    "MASTER_PROJECT_EN": "near-total null upstream, never 100%",
     "MASTER_PROJECT_AR": "100% null upstream",
 }
 
@@ -471,10 +474,21 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
             violations[rule] = violations.get(rule, 0) + 1
         records.append(contract.model_dump())
 
-    frame = pl.DataFrame(records) if records else df.clear()
+    # infer_schema_length=None is REQUIRED on both constructions below. polars
+    # infers the schema from only the first 100 rows by default, so a field that
+    # is null there and a string later raises ComputeError. Not hypothetical: it
+    # fires on output/rent_contracts_20260916.csv at row 101 ("Hills Park"),
+    # while the other four daily files pass, so the ETL would crash on that day.
+    # The df.clear() fallbacks need nothing: an empty frame already carries the
+    # source schema and infers nothing.
+    frame = pl.DataFrame(records, infer_schema_length=None) if records else df.clear()
     return SilverContractResult(
         frame=frame,
-        quarantined=pl.DataFrame(failed) if failed else df.clear(),
+        # same reason as above: `failed` is raw source rows, and a raw source
+        # field is exactly the kind of late-populating column that trips this.
+        quarantined=pl.DataFrame(failed, infer_schema_length=None)
+        if failed
+        else df.clear(),
         groups=_rollup(frame, violations),  # mutates violations in place
         violation_counts=violations,
     )

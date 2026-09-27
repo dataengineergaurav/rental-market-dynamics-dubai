@@ -288,6 +288,35 @@ def test_unrecoverable_arabic_columns_are_documented_not_repaired():
     assert len(res.frame) + len(res.quarantined) == df.height
 
 
+def test_late_non_null_value_does_not_break_frame_construction():
+    """polars infers schema from only the first 100 rows, so an OPTIONAL field
+    that is null there and a string later raises ComputeError. Not hypothetical:
+    it fires on output/rent_contracts_20260916.csv, where master_project_en is
+    non-null in only 3 of 4580 rows and the first lands at index 205
+    ("Hills Park"). The other four daily files pass.
+
+    The field must be one the model accepts as null, or the leading null rows are
+    quarantined and `records` is too short to trip the inference. That is the
+    whole subtlety: a REQUIRED field (area_name_en) cannot produce this defect,
+    because no row with it null ever reaches pl.DataFrame at all."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    df = pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 101,
+        "master_project_en": [None] * 100 + ["Hills Park"],
+        "ejari_property_sub_type_en": ["Flat"] * 101,
+        "contract_start_date": [date(2026, 9, 20)] * 101,
+        "annual_amount": [90000.0] * 101,
+        "actual_area": [900.0] * 101,
+    })
+    res = to_silver(df)
+    assert len(res.frame) + len(res.quarantined) == df.height
+    assert len(res.frame) == 101, "every row is valid; none may be quarantined"
+    assert res.frame["master_project_en"].to_list()[-1] == "Hills Park"
+    assert res.frame["master_project_en"].dtype == pl.String
+
+
 def test_no_row_is_ever_discarded():
     """ADR-03 fail-open: every input row lands in exactly one of frame or
     quarantined. A row that cannot construct is quarantined, never dropped."""
