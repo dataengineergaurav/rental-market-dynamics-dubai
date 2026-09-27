@@ -96,3 +96,113 @@ def test_all_canonical_names_are_declared():
         "contract_registration_date", "contract_amount",
     ):
         assert name in SilverRentContract.model_fields, name
+
+
+def test_derives_duration_and_short_term_flag():
+    from lib.classes.silver_contract import SilverRentContract
+
+    c = SilverRentContract(**_row())
+    assert c.duration_days == 364
+    assert c.is_short_term is False
+    assert c.monthly_rent == Decimal("18750.00")
+
+
+def test_short_term_flag_fires_under_300_days():
+    from lib.classes.silver_contract import SilverRentContract
+
+    c = SilverRentContract(
+        **_row(
+            contract_start_date=date(2026, 9, 20),
+            contract_end_date=date(2026, 11, 20),
+        )
+    )
+    assert c.duration_days == 61
+    assert c.is_short_term is True
+
+
+def test_derived_fields_default_none_so_construction_never_fails():
+    """A derived field declared without a default is REQUIRED in pydantic v2,
+    so mode='after' never runs. This asserts the trap stays closed."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    for name in (
+        "duration_days",
+        "is_short_term",
+        "monthly_rent",
+        "rent_per_sqft",
+        "implied_years",
+    ):
+        assert name in SilverRentContract.model_fields
+        assert not SilverRentContract.model_fields[name].is_required(), name
+
+
+def test_bad_row_collects_violations_instead_of_raising():
+    from lib.classes.silver_contract import SilverRentContract
+
+    c = SilverRentContract(
+        **_row(
+            annual_amount=Decimal("6650000"),
+            actual_area=Decimal("882158"),
+            contract_start_date=date(2027, 1, 1),
+            contract_end_date=date(2026, 1, 1),
+        )
+    )
+    joined = " | ".join(c.violations)
+    assert "annual_amount_above_max" in joined
+    assert "actual_area_above_max" in joined
+    assert "end_before_start" in joined
+    assert c.actual_area == Decimal("882158"), "row is retained, not dropped"
+
+
+def test_amount_mismatch_is_a_reconciliation_violation():
+    """contract_amount/annual_amount == duration in years (corr 0.9956 on the
+    real payload). Disagreement >5% means one of the two is wrong."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    good = SilverRentContract(**_row())
+    assert not [v for v in good.violations if v == "amount_duration_mismatch"]
+
+    bad = SilverRentContract(**_row(contract_amount=Decimal("900000")))
+    assert "amount_duration_mismatch" in bad.violations
+
+
+def test_no_psf_below_200_sqft():
+    from lib.classes.silver_contract import SilverRentContract
+
+    assert SilverRentContract(**_row(actual_area=Decimal("199"))).rent_per_sqft is None
+    assert SilverRentContract(**_row(actual_area=Decimal("1000"))).psf_eligible is True
+
+
+def test_rent_per_sqft_lands_in_the_dubai_market_band():
+    """Guards the 10.76x m2/sqft corruption, at the point the division happens.
+    Spec gate 5: residential flats in the 400-1200 sqft band must land at
+    60-120 AED/sqft. Read as m2 the same figures become 868 AED/sqft, roughly
+    10x market. Moved here from Task 2, where rent_per_sqft did not yet exist."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    c = SilverRentContract(
+        **_row(annual_amount=Decimal("60000"), actual_area=Decimal("744"))
+    )
+    assert c.psf_eligible is True
+    assert Decimal("60") <= c.rent_per_sqft <= Decimal("120"), (
+        f"rent_per_sqft {c.rent_per_sqft} outside 60-120; the unit is not sqft"
+    )
+    assert c.rent_per_sqft * Decimal("10.7639") > Decimal("800")
+
+
+def test_whitespace_is_stripped_under_frozen_config():
+    """The strip must go through object.__setattr__. A plain self.area_name_en =
+    value raises ValidationError under frozen=True, which is the same silent
+    row-loss bug class as the field-bound trap."""
+    from lib.classes.silver_contract import SilverRentContract
+
+    c = SilverRentContract(
+        **_row(
+            area_name_en="  Dubai Marina ",
+            ejari_property_type_en="Unit\t",
+            ejari_property_sub_type_en=" Flat\n",
+        )
+    )
+    assert c.area_name_en == "Dubai Marina"
+    assert c.ejari_property_type_en == "Unit"
+    assert c.ejari_property_sub_type_en == "Flat"

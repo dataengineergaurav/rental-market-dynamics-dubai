@@ -16,7 +16,17 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from lib.config import VALIDATION_THRESHOLDS
+
+SHORT_TERM_DAYS = 300
+RECONCILE_TOLERANCE = Decimal("0.05")
+# 200 sqft equals VALIDATION_THRESHOLDS["min_property_size"], deliberately not
+# read from it: that is the validity range, this is the reporting floor below
+# which a per-sqft figure is meaningless.
+PSF_MIN_AREA_SQFT = 200
+DAYS_PER_YEAR = Decimal("365.25")
 
 # Upstream DLD emits word-length '?' masks for enum-lookup Arabic columns, not
 # mojibake. The original bytes do not exist, so these are dropped, not repaired.
@@ -90,3 +100,76 @@ class SilverRentContract(BaseModel):
     annual_amount: Decimal
     contract_amount: Optional[Decimal] = None
     total_properties: int = 1
+
+    # derived — every one defaults None so construction precedes derivation
+    duration_days: Optional[int] = None
+    is_short_term: Optional[bool] = None
+    monthly_rent: Optional[Decimal] = None
+    rent_per_sqft: Optional[Decimal] = None
+    implied_years: Optional[Decimal] = None
+    psf_eligible: bool = False
+    violations: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _derive_and_collect(self):
+        """Derive contract facts and record every rule that fires. Never raises:
+        a bad cell keeps its value and is named in `violations` so the row
+        survives to Silver (ADR-03 fail-open, ADR-02 grain)."""
+        v = self.violations
+        set_ = object.__setattr__
+
+        max_rent = Decimal(VALIDATION_THRESHOLDS["max_annual_rent"])
+        min_rent = Decimal(VALIDATION_THRESHOLDS["min_annual_rent"])
+        max_area = Decimal(VALIDATION_THRESHOLDS["max_property_size"])
+
+        if self.annual_amount <= 0:
+            v.append("annual_amount_not_positive")
+        elif self.annual_amount < min_rent:
+            v.append("annual_amount_below_min")
+        if self.annual_amount > max_rent:
+            v.append("annual_amount_above_max")
+
+        if self.actual_area < 0:
+            v.append("actual_area_negative")
+        elif self.actual_area > max_area:
+            v.append("actual_area_above_max")
+        elif self.actual_area < PSF_MIN_AREA_SQFT:
+            v.append("actual_area_below_psf_floor")
+        else:
+            set_(self, "psf_eligible", True)
+            set_(
+                self,
+                "rent_per_sqft",
+                (self.annual_amount / self.actual_area).quantize(Decimal("0.01")),
+            )
+
+        if self.annual_amount > 0:
+            set_(
+                self,
+                "monthly_rent",
+                (self.annual_amount / 12).quantize(Decimal("0.01")),
+            )
+
+        if self.contract_start_date and self.contract_end_date:
+            if self.contract_end_date <= self.contract_start_date:
+                v.append("end_before_start")
+            else:
+                days = (self.contract_end_date - self.contract_start_date).days
+                set_(self, "duration_days", days)
+                set_(self, "is_short_term", days < SHORT_TERM_DAYS)
+
+        if self.contract_amount and self.annual_amount > 0:
+            implied = self.contract_amount / self.annual_amount
+            set_(self, "implied_years", implied.quantize(Decimal("0.0001")))
+            if self.duration_days:
+                declared = Decimal(self.duration_days) / DAYS_PER_YEAR
+                if declared > 0 and abs(implied - declared) / declared > RECONCILE_TOLERANCE:
+                    v.append("amount_duration_mismatch")
+
+        for col in ("area_name_en", "ejari_property_type_en", "ejari_property_sub_type_en"):
+            value = getattr(self, col)
+            if isinstance(value, str) and value != value.strip():
+                set_(self, col, value.strip())
+
+        return self
+
