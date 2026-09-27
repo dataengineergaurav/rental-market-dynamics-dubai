@@ -392,6 +392,76 @@ value must aggregate over **deduplicated contracts**, not property rows.
      rule: only 89 of 11,425 surviving rows (0.78%) exceed 1M, in groups of 1–8.
 
    The gate stays RED, and the cause is whole-asset leases in mixed stock, not a missing filter.
+   The measurement stands; the clause it measured is superseded by §3.7.1.
+
+   #### 3.7.1 The Phase 2 market-health gate, restated
+
+   **The clause above is superseded.** `docs/IMPLEMENTATION_PLAN.md` is gitignored
+   (`.gitignore:21`), so its gate text can never be corrected in place and every brief that
+   cites it inherits the error. The gate lives here instead.
+
+   It was RED because it asked two unrelated questions at once: *is this area's median rent
+   plausible* and *does any single lease in this area exceed 1M*. The first is answerable. The
+   second is not a market-health property at all — an area-level `max_rent` over mixed stock
+   **must** contain a whole-asset lease somewhere, and 89 of 11,425 comparable rows (0.78%)
+   exceed 1M in `(area, amount)` groups of 1–8, far below the `> 10` bulk threshold. A
+   residential rent band applied to that maximum is a category error, not a tight threshold.
+   A gate that can never go green teaches people to ignore gates.
+
+   Measured on the pooled five daily files (16,075 rows → 11,425 after the exclusion chain →
+   121 all-stock areas / 103 residential areas at `n >= 10`):
+
+   | Candidate clause | All stock | Residential only |
+   |---|---|---|
+   | areas | 121 | 103 |
+   | `median_rent` range | 24,000 – 590,000 | **28,000 – 280,000** |
+   | areas with `median_rent` outside 20k–500k | 1 (Al Goze Industrial First, 590,000) | **0** |
+   | areas with `max_rent > 1M` | 26 (21.5%) | 12 |
+   | areas with **`p95_rent > 1M`** | 2 | **0** |
+   | `p95_rent` range | — | 50,001 – 900,000 |
+   | worst `max_rent` | Palm Jumeirah 12.61M | Palm Jumeirah 12.61M (n=82) |
+
+   Cost of the `n >= 10` floor, measured rather than assumed: all stock drops **52 of 173**
+   distinct areas (30.1%, 209 rows); residential drops **51 of 154** (33.1%, 194 rows). The
+   floor is the reason the p95 clause is safe — at `n = 10` the linear p95 sits between the
+   9th and 10th sorted amount, i.e. still effectively the maximum, and no residential area in
+   the `[10, 30)` band carries a >1M row today (0 of 27). Tolerance for single leases therefore
+   grows with `n`, which is the correct direction: a bigger sample has to be more extreme before
+   it is called a market.
+
+   **The gate:**
+
+   | Clause | Rule |
+   |---|---|
+   | Population | residential stock only (`RESIDENTIAL_USAGE`, `lib/config.py:129`), after the `build_area_median_index` exclusion chain and the `n >= MIN_AREA_ROWS` floor |
+   | Median band | every area's `median_rent` in **20,000 – 500,000** AED |
+   | Leak clause | every area's **`p95_rent` ≤ 1,000,000** AED |
+   | Sample | `n >= 10` published beside every figure |
+
+   Headroom, so a future reader can tell the clauses are tight rather than vacuous: the median
+   band clears the observed 28,000–280,000 by +40% / +44%, and the p95 ceiling clears the
+   observed worst p95 of 900,000 (Palm Jumeirah) by +11%. It is **not** infinite — a ceiling
+   below 900,000 fails today, and a residential area publishing a 700,000 median fails the
+   band clause. The clauses are red-capable, which is the point.
+
+   Why p95 rather than dropping the leak clause: the superseded note offered both. p95 has
+   discriminating power — 2 all-stock areas and any genuine portfolio (3 rows at 3M inside a
+   40-row residential area puts p95 at 3,000,000 while the median sits at 119,500) fail it.
+   Dropping the clause gates on nothing. `max_rent` stays **published** and ungated: it is
+   real, it is the number a reader wants, and it is simply the wrong statistic to threshold.
+
+   Two things this gate does not do, stated so the next reader does not assume otherwise.
+   It does not narrow the published index: `build_area_median_index` still emits all stock,
+   because an index that silently drops commercial areas is a different product from the one
+   consumers read. And the 18 areas that survive `n >= 10` on all stock but not on residential
+   stock (103 vs 121) are **ungated** — the gate covers 85% of the published areas, and the
+   remaining 15% are small-sample areas whose medians are not defensible at any threshold.
+
+   Defined in code at `lib/analysis/gold_indexes.py` (`GATE_MEDIAN_FLOOR_AED`,
+   `GATE_MEDIAN_CEILING_AED`, `GATE_P95_CEILING_AED`, `build_residential_market_index`) and
+   asserted in `tests/test_gold_indexes.py`. The old clause's `pytest.mark.xfail(strict=True)`
+   is gone: it was a canary for an unachievable gate, and a canary on a dead gate is the
+   opposite of a signal.
 
 Both are small, localised fixes. Neither is in scope for the Silver contract, but the marts are not
 safe to build until they land.
@@ -409,7 +479,7 @@ safe to build until they land.
 | `pyproject.toml` | pydantic stays (added in the uncommitted change, `:25`) |
 | `requirements.txt` | Add `pydantic>=2`; remove orphan `psutil` (in `requirements.txt` but not `pyproject.toml`) |
 | `docs/IMPLEMENTATION_PLAN.md` | Add ADR-06 (pydantic); record the 10.4% PSF-eligible rate against the P0 exit gate at `:31`; reconcile Phase 0/2 status against what already shipped |
-| `README.md` | Correct the pydantic description at `:43` — it is a Silver contract model, not "typed analysis result models" |
+| `README.md` | Add the missing pydantic line to the Stack list. The Stack list had **no** pydantic entry at all, so there is no `:43` description to correct — the earlier draft of this row claimed otherwise and was wrong |
 | `lib/classes/property_usage.py` | Read Silver's `rent_per_sqft` instead of re-deriving PSF at `:90-96` (Gold prerequisite 1). Not the enriched `price_per_sqft`: that is `enrichment.py`'s separate column, guarded by its own `200` literal, and reading it would re-import the second computation site this prerequisite exists to remove |
 | `lib/analysis/area_median_index` | Apply `is_bulk_registration` and the Hotel / Labor Camps / Virtual Unit exclusion; publish `median_rent` as the headline (Gold prerequisite 2) |
 
@@ -443,7 +513,11 @@ Verification is runnable and each command is falsifiable:
     **AED 265,671,900**
 11. No `rent_per_sqm` in `lib/`, `tests/` or `lib/analysis/*.sql`; Gold prerequisite 1 verified by
     `property_usage_*.csv` Residential `median_psf` landing in 20–500 or null
-12. `area_median_index` has 0 rows with `max_rent > 1_000_000` and `median_rent` within 20k–500k
+12. The market-health gate of **§3.7.1** — `build_residential_market_index` over
+    `output/rents_silver_pooled.parquet` has every residential `median_rent` in 20k–500k and every
+    `p95_rent` ≤ 1M, measured at 103 areas, 28,000–280,000 and a worst p95 of 900,000. This
+    replaces the `max_rent > 1_000_000` clause, which 26 of 121 areas fail and which no filter
+    can satisfy
 
 ---
 
