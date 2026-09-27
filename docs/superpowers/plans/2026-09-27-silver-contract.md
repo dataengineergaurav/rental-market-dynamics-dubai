@@ -763,10 +763,17 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
             violations[rule] = violations.get(rule, 0) + 1
         records.append(contract.model_dump())
 
-    frame = pl.DataFrame(records) if records else df.clear()
+    # infer_schema_length=None is REQUIRED. The default samples only the first
+    # 100 rows, so a field that is null there and a string later raises
+    # ComputeError. This is not hypothetical: it fires on
+    # output/rent_contracts_20260916.csv at row 101 ("Hills Park"), while the
+    # other four daily files pass. The ETL would crash on that day.
+    frame = pl.DataFrame(records, infer_schema_length=None) if records else df.clear()
     return SilverContractResult(
         frame=frame,
-        quarantined=pl.DataFrame(failed) if failed else df.clear(),
+        quarantined=pl.DataFrame(failed, infer_schema_length=None)
+        if failed
+        else df.clear(),
         groups=pl.DataFrame(),
         violation_counts=violations,
     )
@@ -1071,13 +1078,19 @@ def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
     rows = []
     for key, block in multi.group_by(list(_GROUP_KEY), maintain_order=True):
         # annual_amount is a _GROUP_KEY member, so it CANNOT disagree inside a
-        # group. Do not add a len(amounts) != 1 branch: it is unreachable, and
-        # merging two contracts is detected by observed != declared below.
+        # group. Do not add a len(amounts) != 1 branch: it is unreachable.
         declared = block["total_properties"][0]
         observed = block.height
-        if observed != declared:
+        if observed > declared:
+            # the key merged two distinct contracts: irreducibly ambiguous
+            # without a contract number
             violations["merged_contract_group"] = violations.get(
                 "merged_contract_group", 0
+            ) + observed
+        elif observed < declared:
+            # the window captured only part of the contract
+            violations["partial_contract_capture"] = violations.get(
+                "partial_contract_capture", 0
             ) + observed
         rows.append(
             {

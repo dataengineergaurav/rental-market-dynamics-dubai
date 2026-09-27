@@ -227,7 +227,9 @@ The asymmetry is the trap and it must be documented on the field:
 (declared 3, observed 1) are visible rather than silent. A group where
 `observed_property_count > total_properties` means the §2.3 key merged two contracts, which is
 exactly the 2-of-84 irreducible case. Those 10 rows are **flagged, not dropped**: the group's
-`is_complete` is `False` and a `merged_contract_group` entry is added to `violation_counts`, so the
+`is_complete` is `False`, and `violation_counts` records `merged_contract_group` (observed exceeds
+declared — the key combined two contracts) separately from `partial_contract_capture` (observed
+falls short — the window saw only part of one), so the
 case is countable without removing data. `annual_amount` is a key member of the §2.3 key, so it
 cannot disagree within a group and needs no separate guard.
 
