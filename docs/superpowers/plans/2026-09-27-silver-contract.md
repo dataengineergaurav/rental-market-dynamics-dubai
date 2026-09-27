@@ -21,7 +21,7 @@
 - **No leading-underscore pydantic field names.** Pydantic v2 raises `NameError` at class-definition time; this is the exact bug that broke the module.
 - **Derived fields must default to `None`.** A derived field declared without a default is *required*, so `mode="after"` validators never run and the model cannot be constructed.
 - **Test command:** `uv run pytest -q` (or `.venv/bin/python -m pytest -q`). `make test` runs `pytest .`.
-- **Reference data:** `output/rent_contracts_20260917.csv` — 4306 rows × 44 columns, valid UTF-8, `CONTRACT_NUMBER` 100% null, `PROPERTY_ID` constant 0, median `ACTUAL_AREA` 75.0, 446/4306 (10.4%) rows PSF-eligible.
+- **Reference data:** `output/rent_contracts_20260917.csv` — 4306 rows × 44 columns, valid UTF-8, `CONTRACT_NUMBER` 100% null, `PROPERTY_ID` constant 0, median `ACTUAL_AREA` 75.0, 443/4306 (10.3%) rows PSF-eligible (446 clear the 200 floor, but 3 of those exceed the 50000 max and route to actual_area_above_max).
 
 ---
 
@@ -531,8 +531,8 @@ Expected: PASS — 14 tests in the file (2 smoke + 5 from Task 2 + 7 added here)
 `output/` is gitignored so this is a local check, not a CI gate. Expected values were measured on
 `output/rent_contracts_20260917.csv`:
 
-Run: `uv run python -c "import polars as pl; from lib.classes.silver_contract import to_silver; d=pl.read_csv('output/rent_contracts_20260917.csv', null_values=['null','NULL',''], ignore_errors=True, schema_overrides={'ANNUAL_AMOUNT':pl.Float64,'ACTUAL_AREA':pl.Float64}); d=d.rename({'AREA_EN':'area_name_en','PROP_SUB_TYPE_EN':'ejari_property_sub_type_en','START_DATE':'contract_start_date','END_DATE':'contract_end_date','USAGE_EN':'property_usage_en','VERSION_EN':'version_en'}); r=to_silver(d); print('rows',len(r),'/',d.height); print('psf_eligible',r.frame['psf_eligible'].sum(),'(want 446)'); v=r.violation_counts; print('below_psf_floor',v.get('actual_area_below_psf_floor'),'(want 3860)'); print('amount_below_min',v.get('annual_amount_below_min'),'(want 9)'); print('amount_above_max',v.get('annual_amount_above_max'),'(want 1)'); print('area_above_max',v.get('actual_area_above_max'),'(want 3)')"`
-Expected: `rows 4306/4306`, `psf_eligible 446`, `3860`, `9`, `1`, `3`
+Run: `uv run python -c "import polars as pl; from lib.classes.silver_contract import to_silver; d=pl.read_csv('output/rent_contracts_20260917.csv', null_values=['null','NULL',''], ignore_errors=True, schema_overrides={'ANNUAL_AMOUNT':pl.Float64,'ACTUAL_AREA':pl.Float64}); d=d.rename({'AREA_EN':'area_name_en','PROP_SUB_TYPE_EN':'ejari_property_sub_type_en','START_DATE':'contract_start_date','END_DATE':'contract_end_date','USAGE_EN':'property_usage_en','VERSION_EN':'version_en'}); r=to_silver(d); print('rows',len(r),'/',d.height); print('psf_eligible',r.frame['psf_eligible'].sum(),'(want 443)'); v=r.violation_counts; print('below_psf_floor',v.get('actual_area_below_psf_floor'),'(want 3860)'); print('amount_below_min',v.get('annual_amount_below_min'),'(want 9)'); print('amount_above_max',v.get('annual_amount_above_max'),'(want 1)'); print('area_above_max',v.get('actual_area_above_max'),'(want 3)'); print('amt_dur_mismatch',v.get('amount_duration_mismatch'),'(want 85, 1.97%)')"`
+Expected: `rows 4306/4306`, `psf_eligible 443`, `3860`, `9`, `1`, `3`, `85`
 
 - [ ] **Step 6: Commit**
 
@@ -698,13 +698,20 @@ def _project(source: dict) -> dict:
                 out[field] = source[candidate]
                 break
     return out
-```
 
-```python
-def _is_masked(value) -> bool:
-    """True for the upstream DLD word-mask: '??', '??????', '??? ??'.
-    The original bytes do not exist, so these are unrecoverable."""
-    return isinstance(value, str) and bool(value) and set(value) <= {"?", " "}
+
+# Two columns need a polars-side cast before pydantic will accept them. The
+# no-raise guarantee covers bad VALUES, not bad TYPES: pydantic rejects these
+# outright, and every row in the real payload would be dropped.
+#
+#   contract_registration_date: the CSV carries '2026-09-16T00:03:07', and
+#     Optional[date] raises date_from_datetime_inexact on a datetime string.
+#   has_parking: PARKING is Int64 and null in 4220 of 4306 rows, and bool
+#     rejects None (int 0/1 is fine).
+_CASTS = {
+    "contract_registration_date": pl.col("contract_registration_date").dt.date(),
+    "has_parking": pl.col("has_parking").fill_null(False).cast(pl.Boolean),
+}
 
 
 def to_silver(df: pl.DataFrame) -> SilverContractResult:
@@ -749,6 +756,26 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
 Add the imports `from dataclasses import dataclass`, `import polars as pl`, `hashlib`, and
 `from pydantic import ValidationError`.
 
+**Apply `_CASTS` at the top of `to_silver`, before the row loop.** Without it every row in the real
+payload is dropped: `Optional[date]` rejects the `'2026-09-16T00:03:07'` datetime string, and `bool`
+rejects the `None` that `PARKING` carries in 4220 of 4306 rows. Add this as the first statement of
+`to_silver`:
+
+```python
+    casts = [expr for name, expr in _CASTS.items() if name in df.columns]
+    if casts:
+        df = df.with_columns(casts)
+```
+
+Also restore `_is_masked`, which the brief's Step 1 test depends on:
+
+```python
+def _is_masked(value) -> bool:
+    """True for the upstream DLD word-mask: '??', '??????', '??? ??'.
+    The original bytes do not exist, so these are unrecoverable."""
+    return isinstance(value, str) and bool(value) and set(value) <= {"?", " "}
+```
+
 **Two forward references this task must not leave dangling.** `_row_hash` and `_rollup` are
 specified in Tasks 5 and 6, but `to_silver` calls both. Define `_row_hash` and `_ROW_HASH_FIELDS`
 in this task's Step 3 as shown in Task 5 Step 3, and leave `groups=pl.DataFrame()` as an empty
@@ -764,7 +791,7 @@ Expected: PASS — 15 tests
 - [ ] **Step 5: Run the contract over the real 4306-row payload**
 
 Run: `uv run python -c "import polars as pl; from lib.classes.silver_contract import to_silver; d=pl.read_csv('output/rent_contracts_20260917.csv', null_values=['null','NULL',''], ignore_errors=True, schema_overrides={'ANNUAL_AMOUNT':pl.Float64,'ACTUAL_AREA':pl.Float64,'IS_FREE_HOLD':pl.Int64,'CONTRACT_AMOUNT':pl.Float64}); d=d.rename({'USAGE_EN':'property_usage_en','AREA_EN':'area_name_en','PROP_TYPE_EN':'ejari_property_type_en','PROP_SUB_TYPE_EN':'ejari_property_sub_type_en','PROJECT_EN':'project_name_en','START_DATE':'contract_start_date','END_DATE':'contract_end_date','VERSION_EN':'version_en'}); r=to_silver(d); print('rows', len(r), 'of', d.height); print('psf_eligible', r.frame['psf_eligible'].sum()); print(dict(sorted(r.violation_counts.items(), key=lambda kv: -kv[1])[:8]))"`
-Expected: `rows 4306 of 4306`, `psf_eligible` ≈ 446, and `actual_area_below_psf_floor` as the largest count (≈ 3860)
+Expected: `rows 4306 of 4306`, `psf_eligible` = 443, and `actual_area_below_psf_floor` as the largest count (≈ 3860)
 
 - [ ] **Step 6: Commit**
 
@@ -775,7 +802,7 @@ git commit -m "feat: to_silver() validates every row and never raises
 Schema failures land in quarantined (retained, not dropped) and every fired
 rule is counted. Unrecoverable Arabic columns are dropped; masked cells in the
 four partially-damaged columns become null and are counted. Runs clean over
-the real 4306-row payload: 4306 out, ~446 PSF-eligible."
+the real 4306-row payload: 4306 out, 443 PSF-eligible."
 ```
 
 ---
@@ -1678,11 +1705,11 @@ Field naming is constrained: canonical snake_case pipeline names only, and no le
 - [ ] **Step 2: Correct the P0 exit gate locally**
 
 In `docs/IMPLEMENTATION_PLAN.md`, amend the Phase 0 exit gate at line 31 to record that only
-446/4306 rows (10.4%) are PSF-eligible, so `avg_psf 45-110` is not a stable expectation on a 1-day
+443/4306 (10.3%) are PSF-eligible, so `avg_psf 45-110` is not a stable expectation on a 1-day
 sample. Add:
 
 ```markdown
-> **Measured 2026-09-27:** only 10.4% of rows (446/4306) have `ACTUAL_AREA >= 200`, and median
+> **Measured 2026-09-27:** only 10.3% of rows (443/4306) yield a PSF (446 clear the 200 floor, 3 of those exceed the 50000 max), and median
 > area is 75 sqft. The `avg_psf 45-110` gate is not achievable from a 1-day window; the correct
 > gate is "PSF null or within 20-500, with `n` published".
 ```
@@ -1750,12 +1777,12 @@ d = d.rename({'AREA_EN':'area_name_en','PROP_SUB_TYPE_EN':'ejari_property_sub_ty
 r = to_silver(d); f = r.frame
 print('rows', len(r), '/', d.height, '(want 4306/4306)')
 print('record_id distinct', f['record_id'].n_unique(), '(want 4306)')
-print('psf_eligible', f['psf_eligible'].sum(), '(want 446)')
+print('psf_eligible', f['psf_eligible'].sum(), '(want 443)')
 print('groups', r.groups.height, 'complete', r.groups.filter(pl.col('is_complete')).height, '(want 82 complete)')
 "
 ```
 
-Expected: 4306/4306 rows, 4306 distinct `record_id`, 446 PSF-eligible, 82 complete groups, and no
+Expected: 4306/4306 rows, 4306 distinct `record_id`, 443 PSF-eligible, 82 complete groups, and no
 `_sqm` anywhere. If `record_id` is not 4306 distinct, Task 5's `RN` wiring is wrong. If complete
 groups is not 82, the rollup key in Task 6 has drifted from the measured `(start, end, amount,
 version)`.

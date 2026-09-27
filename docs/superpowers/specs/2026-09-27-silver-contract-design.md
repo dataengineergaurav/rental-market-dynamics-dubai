@@ -39,7 +39,7 @@ This spec records the corrected design for all three.
 | 2 | `CONTRACT_AMOUNT` ≠ `ANNUAL_AMOUNT` | 358/4306 rows (8.3%) differ. `contract_amount / annual_amount` correlates **0.9956** with duration-in-years; mean absolute difference **0.0065 years** |
 | 3 | Duplicate row blocks | **508 rows (11.8%)** declare `TOTAL_PROPERTIES > 1`; 3798 rows declare `1` and are already one contract per row. Largest blocks are Labor Camps: Muhaisanah Second 87 properties @AED 3.05M, Jabal Ali 26 and 25 @1.09M/1.05M, Al Goze Industrial 19 and 18 @1.14M. Some genuine blocks span multiple `AREA_EN` (one 19-property block covers 7 areas; one 18-property block covers 12) |
 | 4 | `TOTAL` constant | Single distinct value `4306` across all rows |
-| 5 | Nonsensical `ACTUAL_AREA` | min `1.0`, median `75.0`, 25th pct `40.69`, max `882158.0`. Only **446/4306 (10.4%)** are ≥200 |
+| 5 | Nonsensical `ACTUAL_AREA` | min `1.0`, median `75.0`, 25th pct `40.69`, max `882158.0`. Only **443/4306 (10.3%)** yield a PSF — 446 clear the 200 floor, but 3 of those (86281, 148698, 882158 sqft) exceed the 50000 max and route to `actual_area_above_max` |
 | 6 | `IS_FREE_HOLD` duplicated as int and text | Perfect 1:1 with `IS_FREE_HOLD_EN` — 2519 `Free Hold`, 1787 `Non Free Hold`, zero cross-tab exceptions |
 
 ---
@@ -149,7 +149,7 @@ The draft's guard `0 < area < 5000` is also aimed the wrong way. It quarantines 
 is 1.0, and **3860/4306 (89.6%)** are below 200. The `<200 → no PSF` band in
 `lib/transform/enrichment.py:83` is not a workaround, it is the truthful description of this feed.
 This spec does not attempt to fix that; it records it, because the consequence for reporting is
-material: **the PSF metric rests on 446 rows (10.4%) of this window**, and `IMPLEMENTATION_PLAN.md:31`
+material: **the PSF metric rests on 443 rows (10.3%) of this window**, and `IMPLEMENTATION_PLAN.md:31`
 should not expect a stable `avg_psf 45-110` from a 1-day sample.
 
 Upper bound is `lt=50000` per `VALIDATION_THRESHOLDS["max_property_size"]` (`lib/config.py:93`),
@@ -435,7 +435,7 @@ Verification is runnable and each command is falsifiable:
 | `record_id` not stable across gateway reordering | Documented in the docstring. Cross-day dedup uses `row_hash`, which is stable. `count(fact) == sum CSVs` is unaffected |
 | Dropping 3 Arabic columns is irreversible | They are 100% null or 100% masked; there is no data to lose. Recorded in `dropped_columns` with reasons |
 | `validators.py` loses range coverage if the split is botched | Gates 1 and 7 assert both modules still report; thresholds come from one dict |
-| The 10.4% PSF-eligible rate is read as a regression | Recorded against `IMPLEMENTATION_PLAN.md:31` so the P0 gate's `avg_psf 45-110` expectation is not applied to a 446-row sample |
+| The 10.4% PSF-eligible rate is read as a regression | Recorded against `IMPLEMENTATION_PLAN.md:31` so the P0 gate's `avg_psf 45-110` expectation is not applied to a 443-row sample |
 
 ---
 
