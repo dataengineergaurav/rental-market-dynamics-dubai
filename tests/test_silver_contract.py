@@ -256,16 +256,36 @@ def test_to_silver_nulls_masked_arabic_cells():
     assert res.violation_counts.get("masked_arabic_cell", 0) == 1
 
 
-def test_to_silver_drops_unrecoverable_arabic_columns():
+def test_unrecoverable_arabic_columns_are_documented_not_repaired():
+    """The upstream DLD mask cannot be undone — the original bytes do not exist.
+    So these columns are not 'dropped' by a step in to_silver; they are excluded
+    structurally, because extra='ignore' plus model_dump() means only model
+    fields can reach the frame. What this test really pins is that the two
+    module constants agree: a column listed as unrecoverable must also carry a
+    dropped_columns reason, or the documentation silently rots."""
     import polars as pl
-    from lib.classes.silver_contract import ARABIC_DROPPED, dropped_columns, to_silver
+    from lib.classes.silver_contract import (
+        ARABIC_DROPPED,
+        SilverRentContract,
+        dropped_columns,
+        to_silver,
+    )
 
-    df = _frame(1)
-    df = df.with_columns(pl.lit("??").alias("VERSION_AR"), pl.lit("??").alias("IS_FREE_HOLD_AR"))
-    res = to_silver(df)
     for col in ARABIC_DROPPED:
-        assert col not in res.frame.columns
-    assert "VERSION_AR" in dropped_columns
+        assert col in dropped_columns, f"{col} has no dropped_columns reason"
+        assert col not in SilverRentContract.model_fields, (
+            f"{col} is declared as a field but documented as unrecoverable"
+        )
+
+    df = pl.DataFrame({
+        "area_name_en": ["Dubai Marina"],
+        "annual_amount": [90000.0],
+        "actual_area": [900.0],
+        "VERSION_AR": ["?????"],
+    })
+    res = to_silver(df)
+    assert "VERSION_AR" not in res.frame.columns
+    assert len(res.frame) + len(res.quarantined) == df.height
 
 
 def test_no_row_is_ever_discarded():

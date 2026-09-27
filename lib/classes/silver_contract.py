@@ -241,8 +241,9 @@ def _project(source: dict) -> dict:
 # df.columns`. RentsTransformer renames only 13 columns, so keying by model
 # field name silently skips any cast whose source kept its UPPERCASE name.
 #
-#   contract_registration_date: RentsTransformer emits Datetime and 748 of 4306
-#     stamps carry a non-midnight time, which Optional[date] rejects with
+#   contract_registration_date: RentsTransformer emits Datetime and ALL 4306
+#     stamps carry a non-midnight time (3337 distinct values, 00:03:07 to
+#     23:57:06, none at 00:00:00), which Optional[date] rejects with
 #     date_from_datetime_inexact. START_DATE/END_DATE need no cast: all 4306
 #     are exactly midnight, which pydantic accepts as a date.
 #   PARKING: Int64, null in 4220 of 4306 rows, and bool rejects None. Aliased
