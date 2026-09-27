@@ -14,6 +14,7 @@ from lib.extract.ejari_rents_downloader import EjariRentsDownloader
 from lib.transform.rents_transformer import RentsTransformer
 from lib.classes.property_usage import PropertyUsage
 from lib.classes.validators import RentContractValidator, validate_rent_contracts
+from lib.classes.silver_contract import SilverRentContract
 from lib.config import DATA_QUALITY_RULES
 
 import pytest
@@ -455,29 +456,75 @@ class TestETLPipelineIntegration:
     def test_transform_rents_runs_the_silver_contract(self, tmp_path):
         """transform_rents must run to_silver and rewrite the parquet.
 
-        RentsTransformer runs for real against a tmp_path CSV, so read_parquet
-        and write_parquet are NOT patched. Asserting on a patched
-        DataFrame.write_parquet would only ever see the path string, never the
-        frame that was written.
+        Uses a synthetic CSV: .gitignore excludes **.csv, so a test reading
+        output/ would pass vacuously in CI — and a skipped gate is exactly the
+        failure mode this task exists to close.
         """
-        from run_etl_pipeline import transform_rents
+        import run_etl_pipeline
 
         csv = tmp_path / "rent_contracts_20260917.csv"
         parquet = tmp_path / "rent_contracts_20260917.parquet"
-        pl.read_csv(
-            "output/rent_contracts_20260917.csv", n_rows=50, null_values=[""],
-            ignore_errors=True,
-            schema_overrides={"ANNUAL_AMOUNT": pl.Float64, "ACTUAL_AREA": pl.Float64},
-        ).write_csv(csv)
+        n = 60
+        pl.DataFrame({
+            "RN": list(range(1, n + 1)),
+            "AREA_EN": ["Dubai Marina"] * n,
+            "USAGE_EN": ["Residential"] * n,
+            "PROP_TYPE_EN": ["Unit"] * n,
+            "PROP_SUB_TYPE_EN": ["Flat"] * n,
+            "START_DATE": ["2026-09-20T00:00:00"] * n,
+            "END_DATE": ["2027-09-19T00:00:00"] * n,
+            # non-midnight on purpose: this is the field infer_schema_length=None
+            # exists for. On the real payload it made polars' 100-row schema
+            # inference fail at row 101 on 20260916 (Task 4), and it also
+            # exercises the _CASTS date cast in silver_contract.
+            "REGISTRATION_DATE": ["2026-09-12T00:03:07"] * n,
+            "ANNUAL_AMOUNT": [90000.0] * n,
+            "CONTRACT_AMOUNT": [90000.0] * n,
+            "ACTUAL_AREA": [900.0] * n,
+            "IS_FREE_HOLD": [1] * n,
+            "VERSION_EN": ["New"] * n,
+            "TOTAL_PROPERTIES": [1] * n,
+        }).write_csv(csv)
 
-        assert transform_rents(str(csv), str(parquet)) is True
+        ok = run_etl_pipeline.transform_rents(str(csv), str(parquet))
+        assert ok is True
 
-        # spec gate 8: the written frame keeps 1 row per input row (ADR-02)
-        assert parquet.exists(), "transform_rents must rewrite the parquet in place"
+        # the Silver contract must have rewritten the parquet
+        assert parquet.exists()
         written = pl.read_parquet(parquet)
-        assert written.height == 50
-        assert written['record_id'].n_unique() == 50
-        assert 'violations' in written.columns
+        assert written.height == n, "one row per input row (ADR-02 grain preserved)"
+        assert written["record_id"].n_unique() == n
+        assert "violations" in written.columns
+        assert "contract_id" not in written.columns, "CONTRACT_NUMBER is 100% null; alias removed"
+        assert set(written.columns) == set(SilverRentContract.model_fields)
+
+    def test_transform_rents_does_not_swallow_a_broken_silver_contract(self, tmp_path):
+        """The old code wrapped validation in except Exception and logged
+        'Validation gate skipped', then returned True. That is how a module-level
+        NameError shipped as a passing P0.3 gate. A broken Silver contract must
+        propagate.
+
+        Patched rather than editing the module: this asserts the SHAPE of the
+        call path, not the contents of silver_contract.py, so it stays runnable
+        in a checkout where that module is fine.
+        """
+        from unittest.mock import patch
+        import run_etl_pipeline
+
+        csv = tmp_path / "in.csv"
+        parquet = tmp_path / "out.parquet"
+        pl.DataFrame({
+            "AREA_EN": ["Dubai Marina"], "USAGE_EN": ["Residential"],
+            "ANNUAL_AMOUNT": [90000.0], "ACTUAL_AREA": [900.0],
+            "START_DATE": ["2026-09-20T00:00:00"], "END_DATE": ["2027-09-19T00:00:00"],
+        }).write_csv(csv)
+
+        # the local `from lib.classes.silver_contract import to_silver` inside
+        # transform_rents resolves the module attribute at call time, so this
+        # patch is what the function actually calls.
+        with patch("lib.classes.silver_contract.to_silver", side_effect=ImportError("boom")):
+            with pytest.raises(ImportError):
+                run_etl_pipeline.transform_rents(str(csv), str(parquet))
 
     @patch.dict(os.environ, {'GH_TOKEN': 'test_token'})
     @patch('run_etl_pipeline.GitHubRelease')
