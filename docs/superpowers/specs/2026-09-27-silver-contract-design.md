@@ -35,7 +35,7 @@ This spec records the corrected design for all three.
 
 | # | Defect | Measured in payload |
 |---|---|---|
-| 1 | Arabic columns corrupted | Upstream DLD **word-length mask**, not mojibake. `Free Hold`→`??`, `Non Free Hold`→`??? ??`, `New`→`??????`, `Renewed`→`?????`. File decodes as strict UTF-8; the `?` are literal ASCII already committed to disk. `MASTER_PROJECT_AR` is 100% *null*, not corrupted |
+| 1 | Arabic columns corrupted | Upstream DLD **word-length mask**, not mojibake. `Free Hold`→`??`, `Non Free Hold`→`??? ??`, `New`→`??????`, `Renewed`→`?????`. File decodes as strict UTF-8; the `?` are literal ASCII already committed to disk. `MASTER_PROJECT_AR` is *not* corrupted and *not* 100% null — it is near-empty: 4 non-empty of 16,075 rows across the five daily files (1 on 20260913, 3 on 20260916) |
 | 2 | `CONTRACT_AMOUNT` ≠ `ANNUAL_AMOUNT` | 358/4306 rows (8.3%) differ. `contract_amount / annual_amount` correlates **0.9956** with duration-in-years; mean absolute difference **0.0065 years** |
 | 3 | Duplicate row blocks | **508 rows (11.8%)** declare `TOTAL_PROPERTIES > 1`; 3798 rows declare `1` and are already one contract per row. Largest blocks are Labor Camps: Muhaisanah Second 87 properties @AED 3.05M, Jabal Ali 26 and 25 @1.09M/1.05M, Al Goze Industrial 19 and 18 @1.14M. Some genuine blocks span multiple `AREA_EN` (one 19-property block covers 7 areas; one 18-property block covers 12) |
 | 4 | `TOTAL` constant | Single distinct value `4306` across all rows |
@@ -56,7 +56,13 @@ on already-correct Arabic it raises `UnicodeEncodeError`, which the bare `except
 
 Treatment: **detect, drop, count.** No repair is attempted.
 
-- Drop as unrecoverable: `VERSION_AR`, `IS_FREE_HOLD_AR` (100% masked), `MASTER_PROJECT_AR` (100% null)
+- Drop as unrecoverable: `VERSION_AR`, `IS_FREE_HOLD_AR` — 100% `?`-masked, 16,075 of 16,075 rows
+  non-empty with every non-space character a `?`, so the original bytes do not exist.
+- Drop by **decision, not by loss**: `MASTER_PROJECT_AR` — near-empty upstream, *not* masked, and
+  *not* 100% null. 4 of 16,075 rows carry real unmasked Arabic (`جنات ` ×2, `هيلز بارك`,
+  `رمرام - الرمث`), split 1 on 20260913 / 3 on 20260916 exactly like `MASTER_PROJECT_EN`. Dropping
+  it discards 4 real values on purpose, because nothing downstream reads an Arabic master-project
+  name. This is the one drop of the three a future reader should challenge rather than assume.
 - Null the masked cells in the partially-damaged columns and count them per column. Measured masked
   cell counts in retained `_AR` columns: `PROJECT_AR` 21, `NEAREST_METRO_AR` 2, `NEAREST_MALL_AR` 0,
   `NEAREST_LANDMARK_AR` 0 — **23 cells total (0.5%)**. This is a rounding error, not a migration.
@@ -437,7 +443,7 @@ Verification is runnable and each command is falsifiable:
 |---|---|
 | `utf-8` strict read fails on a future non-UTF-8 payload | The current file validates clean. If it ever fails, the failure is loud and quarantines the day rather than silently mangling Arabic |
 | `record_id` not stable across gateway reordering | Documented in the docstring. Cross-day dedup uses `row_hash`, which is stable. `count(fact) == sum CSVs` is unaffected |
-| Dropping 3 Arabic columns is irreversible | They are 100% null or 100% masked; there is no data to lose. Recorded in `dropped_columns` with reasons |
+| Dropping 3 Arabic columns is irreversible | `VERSION_AR` and `IS_FREE_HOLD_AR` are 100% `?`-masked — the bytes never reached the payload, so there is no data to lose. `MASTER_PROJECT_AR` is a different case: 4 of 16,075 rows hold real unmasked Arabic, so 4 genuine values *are* discarded, deliberately, for want of a downstream reader. Recorded in `dropped_columns` with reasons; revisit if one appears |
 | `validators.py` loses range coverage if the split is botched | Gates 1 and 7 assert both modules still report; thresholds come from one dict |
 | The 10.4% PSF-eligible rate is read as a regression | Recorded against `IMPLEMENTATION_PLAN.md:31` so the P0 gate's `avg_psf 45-110` expectation is not applied to a 443-row sample |
 

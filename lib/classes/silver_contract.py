@@ -31,8 +31,22 @@ RECONCILE_TOLERANCE = Decimal("0.05")
 PSF_MIN_AREA_SQFT = 200
 DAYS_PER_YEAR = Decimal("365.25")
 
-# Upstream DLD emits word-length '?' masks for enum-lookup Arabic columns, not
-# mojibake. The original bytes do not exist, so these are dropped, not repaired.
+# These three are dropped for TWO DIFFERENT REASONS. Do not read this as one.
+#
+# VERSION_AR and IS_FREE_HOLD_AR are 100% '?'-masked upstream: 16075 of 16075
+# rows non-empty across the five daily files, every non-space character a '?'.
+# The original bytes were destroyed by DLD before the payload was written, so
+# the text is unrecoverable and no repair could recover it.
+#
+# MASTER_PROJECT_AR is NOT masked. It is near-empty, not corrupted: 4 of 16075
+# rows carry real, unmasked Arabic ('جنات ' x2, 'هيلز بارك', 'رمرام - الرمث'),
+# split 1 on 20260913 / 3 on 20260916 — the same split as MASTER_PROJECT_EN.
+# Dropping it is therefore a DECISION, not a forced loss: 4 genuine values are
+# discarded on purpose because nothing downstream reads an Arabic master-project
+# name. If that ever changes, this drop is what to challenge first — the data
+# was never missing, only unwanted. It stays in the tuple so the tuple and
+# dropped_columns keep agreeing (asserted in tests), and the design spec lists
+# all three as deliberately dropped.
 ARABIC_DROPPED: tuple[str, ...] = ("VERSION_AR", "IS_FREE_HOLD_AR", "MASTER_PROJECT_AR")
 
 dropped_columns: dict[str, str] = {
