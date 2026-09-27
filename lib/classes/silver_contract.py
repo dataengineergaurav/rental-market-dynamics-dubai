@@ -361,18 +361,26 @@ class SilverContractGroup:
 _GROUP_KEY = ("contract_start_date", "contract_end_date", "annual_amount", "version_en")
 
 
-def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
+def _rollup(frame: pl.DataFrame, out_violations: dict[str, int]) -> pl.DataFrame:
     """Reconstruct contract blocks for rows declaring more than one property.
     CONTRACT_NUMBER is 100% null upstream, so the key is the best available
     proxy: it reconstructs 82 of 84 declared blocks exactly on the real
     payload. The 2 failures are two contracts sharing dates and amount, which
     is irreducibly ambiguous without a contract number.
 
-    Adds to `violations` as a side effect — a key that merges two contracts
-    (observed > declared) contributes its whole row count to
-    `merged_contract_group`, so the problem is visible in violation_counts and
-    not only as is_complete=False on the group. Those rows are flagged, never
-    dropped."""
+    Adds to `out_violations` in place, so both ways a block can fail to
+    reconstruct are visible in violation_counts and not only as is_complete=False
+    on the group. They are DIFFERENT signals and are tallied separately, because
+    conflating them makes the merged-key problem unsizable:
+
+      observed > declared — the key merged two genuinely distinct contracts.
+                            Irreducible without a contract number. Counted under
+                            `merged_contract_group`.
+      observed < declared — the window captured only part of the contract. A
+                            capture problem, not a key problem. Counted under
+                            `partial_contract_capture`.
+
+    Rows in either case are flagged, never dropped."""
     if frame.height == 0 or "total_properties" not in frame.columns:
         return pl.DataFrame()
 
@@ -386,10 +394,17 @@ def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
         observed = block.height
         # annual_amount is a _GROUP_KEY member, so it CANNOT disagree inside a
         # group. Do not add a len(amounts) != 1 branch: it is unreachable, and
-        # merging two contracts is detected by observed != declared below.
-        if observed != declared:
-            violations["merged_contract_group"] = violations.get(
+        # the two ways a block can mismatch are counted separately below.
+        if observed > declared:
+            # the key merged two distinct contracts: irreducibly ambiguous
+            # without a contract number
+            out_violations["merged_contract_group"] = out_violations.get(
                 "merged_contract_group", 0
+            ) + observed
+        elif observed < declared:
+            # the window captured only part of the contract
+            out_violations["partial_contract_capture"] = out_violations.get(
+                "partial_contract_capture", 0
             ) + observed
         rows.append(
             {
@@ -460,7 +475,7 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
     return SilverContractResult(
         frame=frame,
         quarantined=pl.DataFrame(failed) if failed else df.clear(),
-        groups=_rollup(frame, violations),
+        groups=_rollup(frame, violations),  # mutates violations in place
         violation_counts=violations,
     )
 

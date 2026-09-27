@@ -542,3 +542,33 @@ def test_merged_group_is_counted_in_violation_counts():
     res = to_silver(pl.DataFrame(rows))
     assert res.groups["observed_property_count"][0] == 4
     assert res.violation_counts.get("merged_contract_group") == 4
+
+
+def test_partial_capture_is_not_counted_as_a_merge():
+    """A partial capture (the window saw part of the contract) is a different
+    signal from a merge (the key combined two contracts). Counting one as the
+    other makes the merged-key problem unsizable."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    res = to_silver(pl.DataFrame(_block(3)[:1]))
+    assert res.groups["total_properties"][0] == 3
+    assert res.groups["observed_property_count"][0] == 1
+    assert res.groups["is_complete"][0] is False
+    assert res.violation_counts.get("partial_contract_capture") == 1
+    assert "merged_contract_group" not in res.violation_counts
+
+
+def test_merge_and_partial_capture_are_counted_separately():
+    """Both signals can occur in one run and must not be conflated."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    merged = _block(2) + _block(2)
+    for r in merged:
+        r["contract_start_date"] = date(2026, 9, 20)
+        r["contract_end_date"] = date(2027, 9, 19)
+        r["annual_amount"] = Decimal("43200")
+    res = to_silver(pl.DataFrame(merged + _block(3)[:1]))
+    assert res.violation_counts.get("merged_contract_group") == 4
+    assert res.violation_counts.get("partial_contract_capture") == 1
