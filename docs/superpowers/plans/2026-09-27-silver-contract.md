@@ -20,6 +20,12 @@
 - **No new dependencies.** pydantic v2 is already in `pyproject.toml:25`. ADR-06 in `docs/IMPLEMENTATION_PLAN.md:11` documents it.
 - **No leading-underscore pydantic field names.** Pydantic v2 raises `NameError` at class-definition time; this is the exact bug that broke the module.
 - **Derived fields must default to `None`.** A derived field declared without a default is *required*, so `mode="after"` validators never run and the model cannot be constructed.
+- **polars `DataFrame.equals()` compares values only, not dtypes.** `pl.DataFrame({"a":[1]},
+  schema={"a": pl.Int64}).equals(... schema={"a": pl.UInt32})` returns `True`. So an equality check
+  in this repo is value-identity by default and can never catch a dtype regression — which is
+  exactly how `build_area_median_index` emitted `n` as UInt32 while the published artifact is
+  Int64, behind a report claiming "reproduces the shipped CSV exactly". Assert dtypes explicitly
+  (`frame.schema`, or a literal `PUBLISHED_SCHEMA`), never via `equals()`.
 - **Never feed `to_silver` the raw Bronze CSV.** It expects the frame `RentsTransformer` produces.
   The raw CSV has none of the 13 snake_case aliases, no parsed dates, and no `schema_overrides`
   dtypes, so `_project` finds almost nothing and `ValidationError` quarantines every row — 0
