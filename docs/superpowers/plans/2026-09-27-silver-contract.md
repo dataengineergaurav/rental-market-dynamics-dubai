@@ -1258,7 +1258,9 @@ gate. The import now sits on the main path, so a broken module fails loudly.
 - [ ] **Step 4: Fix the encoding and the dead alias**
 
 In `lib/transform/rents_transformer.py`, change line 22 from `encoding="utf8-lossy",` to
-`encoding="utf-8",`. Delete the `"CONTRACT_NUMBER": "contract_id",` entry from the `aliases` dict
+`encoding="utf8",` — **not** `"utf-8"`. polars 1.44.2 accepts `utf-8` in `read_csv` (eager) but
+**rejects it in `scan_csv` (lazy)** with `ValueError: csv encoding must be one of {'utf8',
+'utf8-lossy'}`, and `RentsTransformer` uses `scan_csv`. Verified on this version. Delete the `"CONTRACT_NUMBER": "contract_id",` entry from the `aliases` dict
 (line 53) — `CONTRACT_NUMBER` is 100% null, so the alias only manufactures an all-null column, and
 `record_id` is produced downstream by the Silver contract where `RN` is still available.
 
