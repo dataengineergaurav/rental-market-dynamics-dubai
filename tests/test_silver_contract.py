@@ -334,3 +334,23 @@ def test_record_id_differs_when_row_number_differs():
     a = to_silver(pl.DataFrame([{**_row(), "RN": 1}])).frame["record_id"][0]
     b = to_silver(pl.DataFrame([{**_row(), "RN": 2}])).frame["record_id"][0]
     assert a != b
+
+
+def test_row_hash_normalises_whitespace_before_hashing():
+    """row_hash runs before the model strips whitespace, so it must strip too —
+    otherwise two rows that normalise to the same contract hash differently and
+    cross-day dedup treats them as distinct."""
+    import polars as pl
+    from lib.classes.silver_contract import to_silver
+
+    df = pl.DataFrame({
+        "area_name_en": ["Dubai Marina", "  Dubai Marina  "],
+        "ejari_property_sub_type_en": ["Flat", "Flat"],
+        "contract_start_date": [date(2026, 9, 20)] * 2,
+        "annual_amount": [90000.0, 90000.0],
+        "actual_area": [900.0, 900.0],
+    })
+    res = to_silver(df)
+    assert res.frame["row_hash"][0] == res.frame["row_hash"][1]
+    # the model normalises both to the same area too
+    assert res.frame["area_name_en"].to_list() == ["Dubai Marina", "Dubai Marina"]

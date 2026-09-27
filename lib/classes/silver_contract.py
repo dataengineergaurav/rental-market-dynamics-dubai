@@ -280,9 +280,13 @@ _ROW_HASH_FIELDS = (
 
 
 def _row_hash(payload: dict) -> str:
-    """Stable fingerprint for cross-day dedup. Deliberately excludes RN, which
-    is the gateway's per-response ordinal and changes if rows are reordered."""
-    parts = [str(payload.get(f) or "") for f in _ROW_HASH_FIELDS]
+    """Stable fingerprint for cross-day dedup, and the only key safe to use
+    across days. Deliberately excludes RN: RN is a column that travels with its
+    row, so reordering the payload cannot change this hash — but a renumbered RN
+    (different P_SKIP/P_TAKE pagination) does change record_id, and this hash is
+    what stays put when that happens. Not unique by design: it resolves 3378 of
+    4306 rows, so it deduplicates, it does not identify."""
+    parts = [str(payload.get(f) or "").strip() for f in _ROW_HASH_FIELDS]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
