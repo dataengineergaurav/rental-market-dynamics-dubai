@@ -596,7 +596,11 @@ def test_to_silver_never_raises_on_garbage():
         }
     )
     res = to_silver(bad)
-    assert len(res.frame) == 3
+    # the null area_name_en row cannot construct, so it is quarantined, not
+    # discarded. frame and quarantined are disjoint and together cover the input.
+    assert len(res.frame) == 2
+    assert len(res.quarantined) == 1
+    assert len(res.frame) + len(res.quarantined) == bad.height
     assert res.violation_counts
 
 
@@ -708,9 +712,16 @@ def _project(source: dict) -> dict:
 #     Optional[date] raises date_from_datetime_inexact on a datetime string.
 #   has_parking: PARKING is Int64 and null in 4220 of 4306 rows, and bool
 #     rejects None (int 0/1 is fine).
+#
+# KEYED BY SOURCE COLUMN, not model field name. The guard below is
+# `if name in df.columns`, and df carries the transformer's column names — the
+# canonical aliases plus the original UPPERCASE leftovers. `has_parking` is
+# never a column (its source is `PARKING`), so keying by model name makes the
+# cast silently skip and 4251 rows drop. Same bug class as _SOURCE_COLUMNS,
+# one layer up: each expression must alias itself to the model field name.
 _CASTS = {
     "contract_registration_date": pl.col("contract_registration_date").dt.date(),
-    "has_parking": pl.col("has_parking").fill_null(False).cast(pl.Boolean),
+    "PARKING": pl.col("PARKING").fill_null(False).cast(pl.Boolean).alias("has_parking"),
 }
 
 
@@ -718,6 +729,7 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
     """Validate every row. Never raises: rows that fail hard rules land in
     `quarantined` (retained, not dropped) and every fired rule is counted."""
     records: list[dict] = []
+    failed: list[dict] = []
     violations: dict[str, int] = {}
 
     for source in df.iter_rows(named=True):
@@ -734,24 +746,27 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
             for err in exc.errors():
                 rule = f"schema:{err['loc'][0] if err['loc'] else 'row'}"
                 violations[rule] = violations.get(rule, 0) + 1
+            failed.append(source)
             continue
         for rule in contract.violations:
             violations[rule] = violations.get(rule, 0) + 1
         records.append(contract.model_dump())
 
     frame = pl.DataFrame(records) if records else df.clear()
-    flagged = (
-        frame.filter(pl.col("violations").list.len() > 0)
-        if "violations" in frame.columns
-        else frame.clear()
-    )
     return SilverContractResult(
         frame=frame,
-        quarantined=flagged,
+        quarantined=pl.DataFrame(failed) if failed else df.clear(),
         groups=pl.DataFrame(),
         violation_counts=violations,
     )
 ```
+
+**`frame` and `quarantined` are disjoint buckets, and the invariant is
+`len(frame) + len(quarantined) == df.height`.** A row that cannot be constructed at all — null in a
+required field — has no place in a validated frame, and Task 6's rollup aggregates over `frame`, so
+a half-null row there is a hazard. It is not discarded: the raw source row goes to `quarantined`.
+Rows that DO construct keep every value and carry their violations in the per-row `violations`
+column, so `frame` remains the fail-open dataset (ADR-03). Test that invariant explicitly.
 
 Add the imports `from dataclasses import dataclass`, `import polars as pl`, `hashlib`, and
 `from pydantic import ValidationError`.
@@ -786,7 +801,7 @@ every task.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_silver_contract.py -v`
-Expected: PASS — 15 tests
+Expected: PASS — 18 tests in the file
 
 - [ ] **Step 5: Run the contract over the real 4306-row payload**
 
