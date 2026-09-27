@@ -373,10 +373,42 @@ def test_row_hash_distinguishes_zero_from_absent():
     assert _row_hash(zero) != _row_hash(base), "0 must not hash as absent"
     # every falsy zero must clear the None bar, in whatever numeric form
     assert _row_hash({**base, "annual_amount": 0.0}) != _row_hash(base)
-    # KNOWN GAP, deliberately not fixed here: str(0) is "0" and str(0.0) is
-    # "0.0", so the two spellings hash differently — as do Decimal("225000")
-    # and 225000.0, which is the CSV path versus the test-helper path.
-    # Unified numeric normalisation is a separate change; asserting the current
-    # behaviour here makes any future fix a deliberate, visible edit rather
-    # than a silent hash migration.
-    assert _row_hash({**base, "annual_amount": 0.0}) != _row_hash(zero)
+
+
+def test_row_hash_is_agnostic_to_numeric_type():
+    """Cross-day dedup breaks if the same contract hashes differently by input
+    type. Production supplies Float64; Decimal and int must agree."""
+    from lib.classes.silver_contract import _row_hash
+
+    base = {
+        "area_name_en": "Dubai Marina",
+        "ejari_property_sub_type_en": "Flat",
+        "contract_start_date": "2026-09-20",
+        "actual_area": 900,
+    }
+    assert _row_hash({**base, "annual_amount": 225000.0}) == _row_hash(
+        {**base, "annual_amount": Decimal("225000")}
+    )
+    assert _row_hash({**base, "annual_amount": 225000.0}) == _row_hash(
+        {**base, "annual_amount": 225000}
+    )
+    assert _row_hash({**base, "actual_area": 20.03}) == _row_hash(
+        {**base, "actual_area": Decimal("20.03")}
+    )
+
+
+def test_frame_carries_the_full_model_schema():
+    """The model is the contract, so the frame must carry every declared field
+    plus the two derived keys — 37 columns. Catches a field added to the model
+    but dropped before the frame."""
+    import polars as pl
+    from lib.classes.silver_contract import SilverRentContract, to_silver
+
+    df = pl.DataFrame({
+        "area_name_en": ["Dubai Marina"],
+        "annual_amount": [90000.0],
+        "actual_area": [900.0],
+    })
+    frame = to_silver(df).frame
+    assert set(frame.columns) == set(SilverRentContract.model_fields)
+    assert frame.width == 37

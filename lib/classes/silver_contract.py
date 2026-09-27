@@ -124,8 +124,10 @@ class SilverRentContract(BaseModel):
     #               per-response ordinal, so it reaches full cardinality but
     #               breaks if a re-fetch RENUMBERS RN (verified: 928 of 4306
     #               rows change id). Reordering rows alone is harmless, since
-    #               RN travels with its row. Cross-day use must key on
-    #               row_hash.
+    #               RN travels with its row. With no RN column at all every id
+    #               ends in ':None' and collides by design, which is correct:
+    #               row_hash is the fallback for those. Cross-day use must key
+    #               on row_hash.
     row_hash: Optional[str] = None
     record_id: Optional[str] = None
 
@@ -279,6 +281,22 @@ _ROW_HASH_FIELDS = (
 )
 
 
+def _hash_part(value) -> str:
+    """Canonical string for one hash field.
+
+    None is absent. Numbers go through Decimal so Decimal('225000'), 225000.0
+    and 225000 all produce '225000' — production supplies Float64, so without
+    this the same contract hashes differently depending on the caller's numeric
+    type, which would break cross-day dedup. 0 and 0.0 are distinct from absent:
+    `or ''` would fold them together.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (int, float, Decimal)):
+        return format(Decimal(str(value)).normalize(), "f")
+    return str(value).strip()
+
+
 def _row_hash(payload: dict) -> str:
     """Stable fingerprint for cross-day dedup, and the only key safe to use
     across days. Deliberately excludes RN: RN is a column that travels with its
@@ -286,12 +304,7 @@ def _row_hash(payload: dict) -> str:
     (different P_SKIP/P_TAKE pagination) does change record_id, and this hash is
     what stays put when that happens. Not unique by design: it resolves 3378 of
     4306 rows, so it deduplicates, it does not identify."""
-    # `or ""` is wrong for numbers: 0 and 0.0 are falsy, so a zero-rent row would
-    # hash as if the field were absent. Test for None explicitly.
-    parts = [
-        "" if payload.get(f) is None else str(payload.get(f)).strip()
-        for f in _ROW_HASH_FIELDS
-    ]
+    parts = [_hash_part(payload.get(f)) for f in _ROW_HASH_FIELDS]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
