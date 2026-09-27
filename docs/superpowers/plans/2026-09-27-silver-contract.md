@@ -20,6 +20,12 @@
 - **No new dependencies.** pydantic v2 is already in `pyproject.toml:25`. ADR-06 in `docs/IMPLEMENTATION_PLAN.md:11` documents it.
 - **No leading-underscore pydantic field names.** Pydantic v2 raises `NameError` at class-definition time; this is the exact bug that broke the module.
 - **Derived fields must default to `None`.** A derived field declared without a default is *required*, so `mode="after"` validators never run and the model cannot be constructed.
+- **Never feed `to_silver` the raw Bronze CSV.** It expects the frame `RentsTransformer` produces.
+  The raw CSV has none of the 13 snake_case aliases, no parsed dates, and no `schema_overrides`
+  dtypes, so `_project` finds almost nothing and `ValidationError` quarantines every row — 0
+  retained. Verify through `RentsTransformer(csv, parquet).transform()` → `pl.read_parquet` →
+  `to_silver`. Several plan verification commands still show the raw-CSV form; ignore them and use
+  the transformer path.
 - **Test command:** `uv run pytest -q` (or `.venv/bin/python -m pytest -q`). `make test` runs `pytest .`.
 - **polars `Int8` temporal overflow trap.** `dt.hour()`, `dt.minute()`, `dt.second()` and friends
   return **Int8**. Arithmetic on them overflows silently: `dt.hour() * 3600` for hour=1 yields 16,
@@ -1049,7 +1055,7 @@ class SilverContractGroup:
 _GROUP_KEY = ("contract_start_date", "contract_end_date", "annual_amount", "version_en")
 
 
-def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
+def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
     """Reconstruct contract blocks for rows declaring more than one property.
     CONTRACT_NUMBER is 100% null upstream, so the key is the best available
     proxy: it reconstructs 82 of 84 declared blocks exactly on the real
@@ -1064,12 +1070,15 @@ def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
 
     rows = []
     for key, block in multi.group_by(list(_GROUP_KEY), maintain_order=True):
-        amounts = block["annual_amount"].unique().to_list()
+        # annual_amount is a _GROUP_KEY member, so it CANNOT disagree inside a
+        # group. Do not add a len(amounts) != 1 branch: it is unreachable, and
+        # merging two contracts is detected by observed != declared below.
         declared = block["total_properties"][0]
         observed = block.height
-        if len(amounts) != 1:
-            # amounts disagree inside one block: the key merged two contracts
-            declared = observed
+        if observed != declared:
+            violations["merged_contract_group"] = violations.get(
+                "merged_contract_group", 0
+            ) + observed
         rows.append(
             {
                 "group_id": hashlib.sha256(
@@ -1077,14 +1086,18 @@ def _rollup(frame: pl.DataFrame) -> pl.DataFrame:
                 ).hexdigest()[:32],
                 "start_date": key[0],
                 "end_date": key[1],
-                "annual_amount": amounts[0] if len(amounts) == 1 else None,
+                # CONTRACT-LEVEL, repeated per member row. Deduplicated, never
+                # summed: the 87-property block carries one value, and summing
+                # it would report AED 265,671,900 instead of AED 3,053,700.
+                "annual_amount": block["annual_amount"][0],
                 "version_en": key[3],
                 "total_properties": declared,
                 "observed_property_count": observed,
                 "total_area_sqft": block["actual_area"].sum(),
                 "record_ids": block["record_id"].to_list(),
+                # a set of categories, not one entry per property row
                 "usages": sorted(
-                    u for u in block["property_usage_en"].to_list() if u is not None
+                    {u for u in block["property_usage_en"].to_list() if u is not None}
                 ),
                 "is_complete": observed == declared,
             }

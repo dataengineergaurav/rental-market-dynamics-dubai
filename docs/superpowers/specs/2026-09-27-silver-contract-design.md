@@ -203,7 +203,7 @@ alias is repointed to `record_id`, and `contract_id` is removed from
 
 | Drafted | Status | Replacement |
 |---|---|---|
-| `contract_number: int` | unusable — 100% null | `group_id: str` — sha256 of the §2.3 key, 16 hex chars |
+| `contract_number: int` | unusable — 100% null | `group_id: str` — sha256 of the §2.3 key, 32 hex chars (matches `row_hash`) |
 | `property_ids: list[int]` | unusable — `PROPERTY_ID` constant 0 | `record_ids: list[str]` — the member rows' `record_id` values (§3.1) |
 | `total_properties: int` | **valid** — matches block size 76.4% overall, exactly on all large blocks | kept as-is |
 | `total_annual_amount: Decimal` | **valid field, wrong name and wrong aggregate** | see below |
@@ -225,9 +225,11 @@ The asymmetry is the trap and it must be documented on the field:
 
 `observed_property_count` is emitted alongside the declared `total_properties` so partial captures
 (declared 3, observed 1) are visible rather than silent. A group where
-`observed_property_count > total_properties` is a violation — it means the §2.3 key merged two
-contracts, which is exactly the 2-of-84 irreducible case. Those 10 rows are quarantined and
-counted, not dropped.
+`observed_property_count > total_properties` means the §2.3 key merged two contracts, which is
+exactly the 2-of-84 irreducible case. Those 10 rows are **flagged, not dropped**: the group's
+`is_complete` is `False` and a `merged_contract_group` entry is added to `violation_counts`, so the
+case is countable without removing data. `annual_amount` is a key member of the §2.3 key, so it
+cannot disagree within a group and needs no separate guard.
 
 The rollup is emitted as a **separate DataFrame** returned on `SilverContractResult.groups`. The
 property-level `frame` is untouched, so ADR-02's 1-registration grain and the
