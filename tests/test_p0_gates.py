@@ -125,6 +125,50 @@ def test_property_usage_omits_psf_when_the_column_is_absent(tmp_path):
     assert "avg_area_sqft" in report.columns, "the rest of the report must survive"
 
 
+def test_both_psf_surfaces_share_one_band_rule(tmp_path):
+    """psf_band_filter is the single publishing rule, so MarketAnalytics and
+    PropertyUsage cannot disagree about what is reportable.
+
+    The 600 AED/sqft row is load-bearing and is at 1000 sqft, so the 200 sqft
+    floor cannot be what excludes it — only the band can. Both surfaces
+    recompute differently (MarketAnalytics divides annual_amount/actual_area,
+    PropertyUsage reads Silver's rent_per_sqft) and must still land on 200.
+    """
+    from lib.classes.market_analytics import MarketAnalytics
+    from lib.classes.property_usage import PropertyUsage
+    from lib.classes.silver_contract import to_silver
+    from lib.config import psf_band_filter
+
+    probe = pl.DataFrame({
+        "property_usage_en": ["Residential", "Residential"],
+        "psf": [600.0, 200.0],
+    })
+    assert probe.filter(psf_band_filter("psf"))["psf"].to_list() == [200.0], (
+        "the helper itself must reject 600 and accept 200 for Residential"
+    )
+
+    silver = to_silver(pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 2,
+        "property_usage_en": ["Residential"] * 2,
+        "annual_amount": [200000, 600000],
+        "actual_area": [1000.0, 1000.0],
+        "RN": [1, 2],
+    })).frame
+    # both rows clear the 200 sqft floor, so the floor is NOT what filters them
+    assert silver["rent_per_sqft"].to_list() == [200.0, 600.0]
+
+    src = tmp_path / "silver.parquet"
+    out = tmp_path / "property_usage.csv"
+    silver.write_parquet(src)
+
+    ma_psf = sorted(MarketAnalytics(silver).calculate_psf_metrics()["psf"].to_list())
+    assert ma_psf == [200.0], f"MarketAnalytics kept {ma_psf}, expected only 200"
+
+    PropertyUsage(str(out)).transform(str(src))
+    pu_psf = pl.read_csv(out)["avg_psf"].to_list()
+    assert pu_psf == [200.0], f"PropertyUsage reported {pu_psf}, expected only 200"
+
+
 def test_validator_gate_no_crash_on_small_df():
     df = pl.DataFrame({
         "contract_id": [1, 2],

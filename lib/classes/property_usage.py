@@ -7,11 +7,7 @@ import polars as pl
 from datetime import date
 from typing import Optional
 
-from lib.config import (
-    COMMERCIAL_USAGE,
-    RESIDENTIAL_USAGE,
-    VALIDATION_THRESHOLDS,
-)
+from lib.config import psf_band_filter
 
 logger = logging.getLogger(__name__)
 
@@ -98,30 +94,16 @@ class PropertyUsage:
             # (output/property_usage_20260913.csv). The 200 floor is therefore
             # deliberately absent from the filter below.
             #
-            # What IS repeated is the validity band, because that is a
-            # publishing decision, not a computation: a 200+ sqft unit at
-            # 8228 AED/sqft is a real luxury registration, so Silver keeps it
-            # (deliberately) and Gold decides not to report it. Same
-            # constants, same intent as MarketAnalytics.calculate_psf_metrics.
+            # The band itself lives in one place, lib.config.psf_band_filter,
+            # shared with MarketAnalytics so the two PSF surfaces cannot drift.
             if "rent_per_sqft" in schema:
-                psf = pl.col("rent_per_sqft").cast(pl.Float64)
                 psf_stats = lf.filter(
                     pl.col("property_usage_en").is_not_null() &
-                    psf.is_not_null() &
-                    (
-                        (
-                            pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE) &
-                            psf.is_between(VALIDATION_THRESHOLDS["min_psf_residential"],
-                                           VALIDATION_THRESHOLDS["max_psf_residential"])
-                        ) | (
-                            pl.col("property_usage_en").is_in(COMMERCIAL_USAGE) &
-                            psf.is_between(VALIDATION_THRESHOLDS["min_psf_commercial"],
-                                           VALIDATION_THRESHOLDS["max_psf_commercial"])
-                        )
-                    )
+                    pl.col("rent_per_sqft").is_not_null() &
+                    psf_band_filter("rent_per_sqft")
                 ).group_by("property_usage_en").agg([
-                    psf.mean().alias("avg_psf"),
-                    psf.median().alias("median_psf"),
+                    pl.col("rent_per_sqft").mean().alias("avg_psf"),
+                    pl.col("rent_per_sqft").median().alias("median_psf"),
                 ]).collect()
 
                 # Join with main stats

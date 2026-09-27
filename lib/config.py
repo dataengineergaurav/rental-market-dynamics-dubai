@@ -8,6 +8,8 @@ parameters for analyzing Dubai rental market data.
 from typing import Dict, List, Tuple
 from enum import Enum
 
+import polars as pl
+
 
 # DLD Data Schema - Actual Column Names
 DLD_SCHEMA = {
@@ -261,3 +263,32 @@ def is_commercial(usage: str) -> bool:
         True if commercial, False otherwise
     """
     return usage in COMMERCIAL_USAGE
+
+
+def psf_band_filter(psf_column: str = "psf"):
+    """Polars expression: keep a PSF only if it sits inside the validity band for
+    its usage class. The area floor is NOT applied here — Silver already nulls
+    PSF below PSF_MIN_AREA_SQFT, and repeating it is what previously let
+    avg_psf 4691 ship (output/property_usage_20260913.csv).
+
+    This is a publishing decision, not a computation: a 200+ sqft unit at
+    8228 AED/sqft is a real registration, so Silver keeps it and Gold declines
+    to report it. Shared by PropertyUsage and MarketAnalytics so the two PSF
+    surfaces cannot drift.
+    """
+    return (
+        (
+            pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)
+            & pl.col(psf_column).is_between(
+                VALIDATION_THRESHOLDS["min_psf_residential"],
+                VALIDATION_THRESHOLDS["max_psf_residential"],
+            )
+        )
+        | (
+            pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)
+            & pl.col(psf_column).is_between(
+                VALIDATION_THRESHOLDS["min_psf_commercial"],
+                VALIDATION_THRESHOLDS["max_psf_commercial"],
+            )
+        )
+    )

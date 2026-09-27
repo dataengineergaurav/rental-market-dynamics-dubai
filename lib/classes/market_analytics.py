@@ -11,10 +11,8 @@ from datetime import date, datetime
 import polars as pl
 
 from lib.config import (
-    COMMERCIAL_USAGE,
     MARKET_METRICS,
-    RESIDENTIAL_USAGE,
-    VALIDATION_THRESHOLDS,
+    psf_band_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,20 +82,10 @@ class MarketAnalytics:
             (pl.col("annual_amount") / pl.col("actual_area")).alias("psf")
         )
         
-        # Filter outliers
-        min_psf_res = VALIDATION_THRESHOLDS["min_psf_residential"]
-        max_psf_res = VALIDATION_THRESHOLDS["max_psf_residential"]
-        min_psf_com = VALIDATION_THRESHOLDS["min_psf_commercial"]
-        max_psf_com = VALIDATION_THRESHOLDS["max_psf_commercial"]
-        
-        psf_data = psf_data.filter(
-            ((pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)) &
-             (pl.col("psf") >= min_psf_res) &
-             (pl.col("psf") <= max_psf_res)) |
-            ((pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)) &
-             (pl.col("psf") >= min_psf_com) &
-             (pl.col("psf") <= max_psf_com))
-        )
+        # Filter outliers. The band is one shared rule, not two copies of it:
+        # lib.config.psf_band_filter is the same expression PropertyUsage reads,
+        # so the two PSF surfaces cannot disagree.
+        psf_data = psf_data.filter(psf_band_filter("psf"))
         
         logger.info(f"Calculated PSF for {psf_data.height:,} records")
         
