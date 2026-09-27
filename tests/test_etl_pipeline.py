@@ -14,6 +14,7 @@ from lib.extract.ejari_rents_downloader import EjariRentsDownloader
 from lib.transform.rents_transformer import RentsTransformer
 from lib.classes.property_usage import PropertyUsage
 from lib.classes.validators import RentContractValidator, validate_rent_contracts
+from lib.config import DATA_QUALITY_RULES
 
 import pytest
 import requests_mock
@@ -300,12 +301,26 @@ class TestValidators:
     
     def test_validate_required_fields(self):
         """Test required fields validation."""
-        # Test with missing required field
-        df_missing_field = self.test_df.drop('contract_id')
+        # contract_id is NOT required any more: it is 100% null in every daily
+        # file, so the frame that dropped only that column is valid. Drop a
+        # field that is still required.
+        df_missing_field = self.test_df.drop('annual_amount')
         result = self.validator.validate_dataframe(df_missing_field)
-        
+
         assert not result.is_valid
         assert any("Missing required columns" in error for error in result.errors)
+
+    def test_contract_id_is_not_required(self):
+        """contract_id left required_fields when it was found 100% null everywhere.
+
+        It is the column most likely to regress, because it still exists in the
+        test frame and in the raw payload — just as an all-null column.
+        """
+        assert 'contract_id' not in DATA_QUALITY_RULES['required_fields']
+        result = self.validator.validate_dataframe(self.test_df.drop('contract_id'))
+        assert not any(
+            "Missing required columns" in error for error in result.errors
+        )
     
     def test_validate_rent_amounts(self):
         """Test rent amount validation."""
@@ -361,8 +376,24 @@ class TestETLPipelineIntegration:
         mock_downloader = Mock()
         mock_downloader.run.return_value = True
         mock_downloader_class.return_value = mock_downloader
+
+        # transform_rents re-reads the parquet and runs the Silver contract on it,
+        # so a "successful" transform that writes no file is now a hard failure
+        # rather than a logged skip. The mock has to honour the real contract.
+        # The paths are constructor args, so read the output path off the class
+        # mock (already called by the time transform() runs).
+        def write_parquet():
+            output_parquet = mock_transformer_class.call_args[0][1]
+            pl.DataFrame({
+                "area_name_en": ["Bur Dubai"],
+                "property_usage_en": ["Residential"],
+                "actual_area": [1200.0],
+                "annual_amount": [90000.0],
+            }).write_parquet(output_parquet)
+            return True
+
         mock_transformer = Mock()
-        mock_transformer.transform.return_value = True
+        mock_transformer.transform.side_effect = write_parquet
         mock_transformer_class.return_value = mock_transformer
         mock_property_usage = Mock()
         mock_property_usage_class.return_value = mock_property_usage
@@ -421,6 +452,33 @@ class TestETLPipelineIntegration:
         mock_downloader_class.assert_called_once_with(self.test_url)
         mock_downloader.run.assert_called_once_with(self.csv_filename)
     
+    def test_transform_rents_runs_the_silver_contract(self, tmp_path):
+        """transform_rents must run to_silver and rewrite the parquet.
+
+        RentsTransformer runs for real against a tmp_path CSV, so read_parquet
+        and write_parquet are NOT patched. Asserting on a patched
+        DataFrame.write_parquet would only ever see the path string, never the
+        frame that was written.
+        """
+        from run_etl_pipeline import transform_rents
+
+        csv = tmp_path / "rent_contracts_20260917.csv"
+        parquet = tmp_path / "rent_contracts_20260917.parquet"
+        pl.read_csv(
+            "output/rent_contracts_20260917.csv", n_rows=50, null_values=[""],
+            ignore_errors=True,
+            schema_overrides={"ANNUAL_AMOUNT": pl.Float64, "ACTUAL_AREA": pl.Float64},
+        ).write_csv(csv)
+
+        assert transform_rents(str(csv), str(parquet)) is True
+
+        # spec gate 8: the written frame keeps 1 row per input row (ADR-02)
+        assert parquet.exists(), "transform_rents must rewrite the parquet in place"
+        written = pl.read_parquet(parquet)
+        assert written.height == 50
+        assert written['record_id'].n_unique() == 50
+        assert 'violations' in written.columns
+
     @patch.dict(os.environ, {'GH_TOKEN': 'test_token'})
     @patch('run_etl_pipeline.GitHubRelease')
     @patch('run_etl_pipeline.os.path.exists', return_value=True)

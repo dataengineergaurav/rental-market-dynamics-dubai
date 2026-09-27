@@ -19,7 +19,10 @@ class RentsTransformer:
             lf = pl.scan_csv(
                 self.input_file,
                 null_values=["null", "NULL", ""],
-                encoding="utf8-lossy",
+                # polars only accepts "utf8" (strict) or "utf8-lossy". The payload
+                # is valid UTF-8, so decode strictly and let a bad byte fail loudly
+                # instead of being silently replaced with U+FFFD.
+                encoding="utf8",
                 ignore_errors=True,
                 schema_overrides={
                     "CONTRACT_AMOUNT": pl.Float64,
@@ -50,7 +53,6 @@ class RentsTransformer:
                 "END_DATE": "contract_end_date",
                 "REGISTRATION_DATE": "contract_registration_date",
                 "CONTRACT_AMOUNT": "contract_amount",
-                "CONTRACT_NUMBER": "contract_id",
             }
             for src, dst in aliases.items():
                 if src in schema_cols and dst not in schema_cols:
