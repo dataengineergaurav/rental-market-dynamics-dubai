@@ -301,3 +301,36 @@ def test_no_row_is_ever_discarded():
     })
     res = to_silver(df)
     assert len(res.frame) + len(res.quarantined) == df.height
+
+
+def test_row_hash_is_stable_across_runs():
+    from lib.classes.silver_contract import to_silver
+
+    a = to_silver(_frame(1)).frame["row_hash"][0]
+    b = to_silver(_frame(1)).frame["row_hash"][0]
+    assert a == b, "row_hash must not depend on RN or row order"
+
+
+def test_record_id_is_unique_within_a_file():
+    from lib.classes.silver_contract import to_silver
+
+    import polars as pl
+
+    rows = []
+    for i in range(50):
+        r = _row()
+        r["RN"] = i
+        rows.append(r)
+    frame = to_silver(pl.DataFrame(rows)).frame
+    assert frame["record_id"].n_unique() == 50
+    assert frame["record_id"].n_unique() == frame.height
+
+
+def test_record_id_differs_when_row_number_differs():
+    from lib.classes.silver_contract import to_silver
+
+    import polars as pl
+
+    a = to_silver(pl.DataFrame([{**_row(), "RN": 1}])).frame["record_id"][0]
+    b = to_silver(pl.DataFrame([{**_row(), "RN": 2}])).frame["record_id"][0]
+    assert a != b

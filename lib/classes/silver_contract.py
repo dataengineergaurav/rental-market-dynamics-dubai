@@ -113,6 +113,22 @@ class SilverRentContract(BaseModel):
     psf_eligible: bool = False
     violations: list[str] = Field(default_factory=list)
 
+    # keys — set by to_silver before construction, so None is never needed in
+    # practice, but it keeps a direct construction from failing. The endpoint
+    # exposes no contract number, so no candidate key is both stable and unique
+    # and both are needed:
+    #   row_hash  — STABLE. Built without RN, so it survives re-fetch and is
+    #               safe for cross-day dedup. Not unique: genuinely identical
+    #               registrations collapse, 4306 rows -> 3378 values.
+    #   record_id — UNIQUE within a file. It appends RN, the gateway's
+    #               per-response ordinal, so it reaches full cardinality but
+    #               breaks if a re-fetch RENUMBERS RN (verified: 928 of 4306
+    #               rows change id). Reordering rows alone is harmless, since
+    #               RN travels with its row. Cross-day use must key on
+    #               row_hash.
+    row_hash: Optional[str] = None
+    record_id: Optional[str] = None
+
     @model_validator(mode="after")
     def _derive_and_collect(self):
         """Derive contract facts and record every rule that fires. Never raises:
