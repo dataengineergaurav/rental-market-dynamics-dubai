@@ -1,0 +1,136 @@
+"""
+Top metros by daily registration volume — query gold_top_metros_daily from a weekly DuckDB.
+
+Usage:
+  uv run python -m lib.analysis.metro_volume --db output/rental_analytics_weekly_2026W37.duckdb
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import logging
+from datetime import date, datetime
+from pathlib import Path
+from typing import List, Optional
+
+import duckdb
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
+
+
+class TopMetroDailyRow(BaseModel):
+    nearest_metro: str
+    contract_reg_date: date
+    number_of_rent_contracts: int = Field(ge=1)
+    contract_rank: int = Field(ge=1, le=3)
+
+    @field_validator("contract_reg_date", mode="before")
+    @classmethod
+    def _coerce_date(cls, v):
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, str):
+            return date.fromisoformat(v[:10])
+        return v
+
+
+class TopMetroDailyResult(BaseModel):
+    rows: List[TopMetroDailyRow]
+    db_path: str
+    week: Optional[str] = None
+
+
+def query_top_metros_daily(db_path: Path | str) -> TopMetroDailyResult:
+    """Read gold_top_metros_daily from a weekly analytics DuckDB and validate with Pydantic."""
+    path = Path(db_path)
+    if not path.exists():
+        raise FileNotFoundError(f"DuckDB not found: {path}")
+
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        records = con.execute(
+            """
+            SELECT nearest_metro, contract_reg_date,
+                   number_of_rent_contracts, contract_rank
+            FROM gold_top_metros_daily
+            ORDER BY contract_reg_date DESC, contract_rank ASC
+            """
+        ).fetchall()
+        week = None
+        try:
+            week = con.execute("SELECT week FROM _meta").fetchone()[0]
+        except Exception:
+            pass
+    finally:
+        con.close()
+
+    rows = [
+        TopMetroDailyRow(
+            nearest_metro=r[0],
+            contract_reg_date=r[1],
+            number_of_rent_contracts=int(r[2]),
+            contract_rank=int(r[3]),
+        )
+        for r in records
+    ]
+    return TopMetroDailyResult(rows=rows, db_path=str(path), week=week)
+
+
+def export_csv(result: TopMetroDailyResult, output: Path | str) -> Path:
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "nearest_metro",
+                "contract_reg_date",
+                "number_of_rent_contracts",
+                "contract_rank",
+            ],
+        )
+        writer.writeheader()
+        for row in result.rows:
+            writer.writerow(row.model_dump())
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Query top metros by registration day")
+    parser.add_argument(
+        "--db",
+        required=True,
+        help="Path to weekly DuckDB (e.g. output/rental_analytics_weekly_2026W37.duckdb)",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional CSV path (default: output/top_metros_daily_<stem>.csv)",
+    )
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+
+    result = query_top_metros_daily(args.db)
+    out = Path(args.output) if args.output else Path(
+        f"output/top_metros_daily_{Path(args.db).stem.replace('rental_analytics_weekly_', '')}.csv"
+    )
+    export_csv(result, out)
+    logger.info(
+        "Wrote %s — %d rows%s",
+        out,
+        len(result.rows),
+        f" (week {result.week})" if result.week else "",
+    )
+    for row in result.rows[:15]:
+        print(
+            f"{row.contract_reg_date}  #{row.contract_rank}  "
+            f"{row.number_of_rent_contracts:5d}  {row.nearest_metro}"
+        )
+    if len(result.rows) > 15:
+        print(f"... ({len(result.rows) - 15} more)")
+
+
+if __name__ == "__main__":
+    main()
