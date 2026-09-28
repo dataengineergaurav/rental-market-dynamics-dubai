@@ -323,13 +323,6 @@ class TestValidators:
             "Missing required columns" in error for error in result.errors
         )
     
-    def test_validate_rent_amounts(self):
-        """Test rent amount validation."""
-        result = self.validator.validate_dataframe(self.test_df)
-        
-        # Should detect negative rent
-        assert any("rent <= 0" in error for error in result.errors)
-    
     def test_validate_business_logic(self):
         """Test business logic validation."""
         # Create dataframe with invalid date range

@@ -39,6 +39,7 @@ Orchestration is Make-driven locally and via GitHub Actions (daily ETL, weekly D
 
 - **Python** 3.9+ (CI uses 3.12)
 - **Polars** / **PyArrow** for transform
+- **Pydantic** v2 for the Silver contract
 - **DuckDB** for weekly analytics
 - **Scrapy** for Ejari extraction
 - **uv** (or pip) for dependencies

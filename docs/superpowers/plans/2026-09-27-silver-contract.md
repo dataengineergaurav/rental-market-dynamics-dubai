@@ -20,6 +20,12 @@
 - **No new dependencies.** pydantic v2 is already in `pyproject.toml:25`. ADR-06 in `docs/IMPLEMENTATION_PLAN.md:11` documents it.
 - **No leading-underscore pydantic field names.** Pydantic v2 raises `NameError` at class-definition time; this is the exact bug that broke the module.
 - **Derived fields must default to `None`.** A derived field declared without a default is *required*, so `mode="after"` validators never run and the model cannot be constructed.
+- **polars `DataFrame.equals()` compares values only, not dtypes.** `pl.DataFrame({"a":[1]},
+  schema={"a": pl.Int64}).equals(... schema={"a": pl.UInt32})` returns `True`. So an equality check
+  in this repo is value-identity by default and can never catch a dtype regression — which is
+  exactly how `build_area_median_index` emitted `n` as UInt32 while the published artifact is
+  Int64, behind a report claiming "reproduces the shipped CSV exactly". Assert dtypes explicitly
+  (`frame.schema`, or a literal `PUBLISHED_SCHEMA`), never via `equals()`.
 - **Never feed `to_silver` the raw Bronze CSV.** It expects the frame `RentsTransformer` produces.
   The raw CSV has none of the 13 snake_case aliases, no parsed dates, and no `schema_overrides`
   dtypes, so `_project` finds almost nothing and `ValidationError` quarantines every row — 0
@@ -32,7 +38,7 @@
   not 3600. Any expression combining a temporal accessor with a multiplier can produce garbage with
   no error. Cast to Int64 first, or avoid the arithmetic. This produced a wrong "748 non-midnight
   stamps" figure that survived into a code comment before being caught.
-- **Reference data:** `output/rent_contracts_20260917.csv` — 4306 rows × 44 columns, valid UTF-8, `CONTRACT_NUMBER` 100% null, `PROPERTY_ID` constant 0, median `ACTUAL_AREA` 75.0, 443/4306 (10.3%) rows PSF-eligible (446 clear the 200 floor, but 3 of those exceed the 50000 max and route to actual_area_above_max).
+- **Reference data:** `output/rent_contracts_20260917.csv` — 4306 rows × 44 columns, valid UTF-8, `CONTRACT_NUMBER` 100% null, `PROPERTY_ID` constant 0, median `ACTUAL_AREA` 75.0, PSF-eligible rate is 7.4-10.3% depending on the day, 1533/16075 (9.5%) across all five files; 443/4306 (10.3%) on 20260917, where 446 clear the 200 floor but 3 exceed the 50000 max.
 
 ---
 
@@ -1757,7 +1763,7 @@ In `docs/IMPLEMENTATION_PLAN.md`, amend the Phase 0 exit gate at line 31 to reco
 sample. Add:
 
 ```markdown
-> **Measured 2026-09-27:** only 10.3% of rows (443/4306) yield a PSF (446 clear the 200 floor, 3 of those exceed the 50000 max), and median
+> **Measured 2026-09-27:** only 7.4-10.3% of rows yield a PSF (1533/16075 = 9.5% across all five daily files; 443/4306 on 20260917, where 446 clear the 200 floor and 3 exceed the 50000 max), and median
 > area is 75 sqft. The `avg_psf 45-110` gate is not achievable from a 1-day window; the correct
 > gate is "PSF null or within 20-500, with `n` published".
 ```

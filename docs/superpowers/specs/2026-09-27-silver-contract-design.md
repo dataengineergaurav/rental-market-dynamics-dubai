@@ -39,7 +39,7 @@ This spec records the corrected design for all three.
 | 2 | `CONTRACT_AMOUNT` ≠ `ANNUAL_AMOUNT` | 358/4306 rows (8.3%) differ. `contract_amount / annual_amount` correlates **0.9956** with duration-in-years; mean absolute difference **0.0065 years** |
 | 3 | Duplicate row blocks | **508 rows (11.8%)** declare `TOTAL_PROPERTIES > 1`; 3798 rows declare `1` and are already one contract per row. Largest blocks are Labor Camps: Muhaisanah Second 87 properties @AED 3.05M, Jabal Ali 26 and 25 @1.09M/1.05M, Al Goze Industrial 19 and 18 @1.14M. Some genuine blocks span multiple `AREA_EN` (one 19-property block covers 7 areas; one 18-property block covers 12) |
 | 4 | `TOTAL` constant | Single distinct value `4306` across all rows |
-| 5 | Nonsensical `ACTUAL_AREA` | min `1.0`, median `75.0`, 25th pct `40.69`, max `882158.0`. Only **443/4306 (10.3%)** yield a PSF — 446 clear the 200 floor, but 3 of those (86281, 148698, 882158 sqft) exceed the 50000 max and route to `actual_area_above_max` |
+| 5 | Nonsensical `ACTUAL_AREA` | min `1.0`, median `75.0`, 25th pct `40.69`, max `882158.0`. Only **7.4–10.3% of rows** yield a PSF, depending on the day: 127/1714 (7.4%), 78/886 (8.8%), 430/4589 (9.4%), 455/4580 (9.9%), 443/4306 (10.3%) — 1533/16075 (9.5%) across all five daily files. On the 20260917 file 446 rows clear the 200 floor but 3 of those (86281, 148698, 882158 sqft) exceed the 50000 max and route to `actual_area_above_max` |
 | 6 | `IS_FREE_HOLD` duplicated as int and text | Perfect 1:1 with `IS_FREE_HOLD_EN` — 2519 `Free Hold`, 1787 `Non Free Hold`, zero cross-tab exceptions |
 
 ---
@@ -91,10 +91,23 @@ VIOLATION when abs(implied_years - declared_years) / declared_years > 0.05
 This holds to 0.0065 years on the current payload, so the 5% band is generous and will not fire on
 healthy data.
 
-The 300-day threshold is retained for `is_short_term` but is reconciled against the two existing
+The 300-day threshold is retained for `is_short_term`. Reconciling it against the two existing
 thresholds in the codebase — `VALIDATION_THRESHOLDS` `min_contract_days: 30` / `max_contract_days: 730`
 (`lib/config.py:102`) and the 180/365 buckets in `_add_contract_duration`
-(`lib/transform/enrichment.py:174`). All three now read from one constant in `lib/config.py`.
+(`lib/transform/enrichment.py:174`) — is **DESCOPED from this branch and not done.**
+
+All three still exist independently, and they are not three readings of one rule:
+
+| Threshold | Value | Owner | What it decides |
+| --- | --- | --- | --- |
+| `SHORT_TERM_DAYS` | 300 | `silver_contract.py:26` | the boolean `is_short_term` on Silver |
+| `min_contract_days` / `max_contract_days` | 30 / 730 | `VALIDATION_THRESHOLDS`, `lib/config.py` | a validity warning in `validators.py` |
+| `_add_contract_duration` buckets | 180 / 365 | `enrichment.py:174-179`, hardcoded | the label `contract_duration_category` |
+
+Unifying them changes `enrichment.py`'s bucketing, which reclassifies published rows — a data
+change, not a refactor, and not this branch's job. The 30/730 pair is not even the same *kind* of
+bound: 300 sits between the 180/365 label boundaries, while 30/730 is an out-of-range check. Recorded
+as an open follow-up, not claimed as shipped.
 
 ### 2.3 Multi-property blocks are real — defect 3
 
@@ -155,7 +168,7 @@ The draft's guard `0 < area < 5000` is also aimed the wrong way. It quarantines 
 is 1.0, and **3860/4306 (89.6%)** are below 200. The `<200 → no PSF` band in
 `lib/transform/enrichment.py:83` is not a workaround, it is the truthful description of this feed.
 This spec does not attempt to fix that; it records it, because the consequence for reporting is
-material: **the PSF metric rests on 443 rows (10.3%) of this window**, and `IMPLEMENTATION_PLAN.md:31`
+material: **the PSF metric rests on 7.4–10.3% of rows** (443 of 4306 on 20260917; 1533 of 16075 across all five files), and `IMPLEMENTATION_PLAN.md:31`
 should not expect a stable `avg_psf 45-110` from a 1-day sample.
 
 Upper bound is `lt=50000` per `VALIDATION_THRESHOLDS["max_property_size"]` (`lib/config.py:93`),
@@ -290,9 +303,12 @@ apart. Each keeps only what it alone can do:
 ### 3.6 Silent drops become recorded drops
 
 With no `model_config`, the draft silently discarded 14 columns. The model instead sets
-`ConfigDict(extra="ignore", frozen=True)` and exposes a module-level `dropped_columns` tuple naming
+`ConfigDict(extra="ignore", frozen=True)` and exposes a module-level `dropped_columns` dict naming
 every discarded column and its reason, so a reader of the Silver parquet can tell the difference
-between "column intentionally removed" and "column silently lost".
+between "column intentionally removed" and "column silently lost". A column that is *carried* is not
+an entry — `MASTER_PROJECT_EN` is near-total null upstream and still ships, because
+`dim_project.sql:10` reads it, so listing it as dropped would assert the opposite of what the
+parquet shows.
 
 ---
 
@@ -351,15 +367,101 @@ value must aggregate over **deduplicated contracts**, not property rows.
    `lib/transform/enrichment.py:90`. The shipped `output/property_usage_20260913.csv` still reports
    Residential `avg_psf 4691.52` / `median_psf 995.27` — both far outside the 20–500 band at
    `lib/config.py:96`, and the exact value `docs/IMPLEMENTATION_PLAN.md:31` says must never ship. The
-   guard is correct but never reaches the report. Fix: `PropertyUsage` reads the enriched
-   `price_per_sqft` instead of recomputing it. One place, not two.
+   guard is correct but never reaches the report. Fix: `PropertyUsage` reads Silver's
+   `rent_per_sqft` instead of recomputing it. One place, not two.
 2. **The Phase 2 gate is not met.** `docs/IMPLEMENTATION_PLAN.md:83` requires medians within
    20k–500k and no `>1M` leak. Measured on the shipped `area_median_index_20260913-17.csv`:
    121/121 areas clear `n >= 10`, but **26 areas have `max_rent > 1M`** (up to AED 4.3M),
-   **`median_rent` reaches AED 590,000** (Al Goze Industrial First — Labor Camps), and **74 of 121
-   areas show a mean/median skew above 20%** with `mean_rent` published beside `median_rent` in the
-   same file. The `is_bulk_registration` flag and the Hotel / Labor Camps / Virtual Unit exclusion
-   from `docs/IMPLEMENTATION_PLAN.md:46` were never applied to this artifact.
+   **`median_rent` reaches AED 590,000**, and **74 of 121 areas show a mean/median skew above 20%**
+   with `mean_rent` published beside `median_rent` in the same file.
+
+   Correcting two claims this bullet previously made, both of which were false:
+
+   - The `is_bulk_registration` flag and the Hotel / Labor Camps / Virtual Unit exclusion from
+     `docs/IMPLEMENTATION_PLAN.md:46` **are** applied. The committed `gold_area_median` view at
+     `build_weekly_duckdb.py:116-130` carries all three, and does so correctly — Virtual Unit is
+     filtered on `ejari_property_type_en`, not the sub_type column, which is where the plan's own
+     text is wrong. The measured CSV is a local artifact that predates the view: 121 areas against
+     the view's 118, from a fact table holding 3,048 bulk rows and 307 Virtual Unit rows that the
+     view excludes. This prerequisite is therefore already satisfied in the shipped view, and the
+     exclusion is not what will close the gate.
+   - Al Goze Industrial First's AED 590,000 median is **not** its Labor Camps rows. That area
+     carries 13 Labor Camps rows, all excluded by the view, and still publishes a 590,000 median
+     across 15 surviving Warehouse / Office / Showroom rows — the 3,310 sqft Showroom, an expensive
+     industrial asset. The subtype exclusion cannot reach it, and neither can the `count > 10` bulk
+     rule: only 89 of 11,425 surviving rows (0.78%) exceed 1M, in groups of 1–8.
+
+   The gate stays RED, and the cause is whole-asset leases in mixed stock, not a missing filter.
+   The measurement stands; the clause it measured is superseded by §3.7.1.
+
+   #### 3.7.1 The Phase 2 market-health gate, restated
+
+   **The clause above is superseded.** `docs/IMPLEMENTATION_PLAN.md` is gitignored
+   (`.gitignore:21`), so its gate text can never be corrected in place and every brief that
+   cites it inherits the error. The gate lives here instead.
+
+   It was RED because it asked two unrelated questions at once: *is this area's median rent
+   plausible* and *does any single lease in this area exceed 1M*. The first is answerable. The
+   second is not a market-health property at all — an area-level `max_rent` over mixed stock
+   **must** contain a whole-asset lease somewhere, and 89 of 11,425 comparable rows (0.78%)
+   exceed 1M in `(area, amount)` groups of 1–8, far below the `> 10` bulk threshold. A
+   residential rent band applied to that maximum is a category error, not a tight threshold.
+   A gate that can never go green teaches people to ignore gates.
+
+   Measured on the pooled five daily files (16,075 rows → 11,425 after the exclusion chain →
+   121 all-stock areas / 103 residential areas at `n >= 10`):
+
+   | Candidate clause | All stock | Residential only |
+   |---|---|---|
+   | areas | 121 | 103 |
+   | `median_rent` range | 24,000 – 590,000 | **28,000 – 280,000** |
+   | areas with `median_rent` outside 20k–500k | 1 (Al Goze Industrial First, 590,000) | **0** |
+   | areas with `max_rent > 1M` | 26 (21.5%) | 12 |
+   | areas with **`p95_rent > 1M`** | 2 | **0** |
+   | `p95_rent` range | — | 50,001 – 900,000 |
+   | worst `max_rent` | Palm Jumeirah 12.61M | Palm Jumeirah 12.61M (n=82) |
+
+   Cost of the `n >= 10` floor, measured rather than assumed: all stock drops **52 of 173**
+   distinct areas (30.1%, 209 rows); residential drops **51 of 154** (33.1%, 194 rows). The
+   floor is the reason the p95 clause is safe — at `n = 10` the linear p95 sits between the
+   9th and 10th sorted amount, i.e. still effectively the maximum, and no residential area in
+   the `[10, 30)` band carries a >1M row today (0 of 27). Tolerance for single leases therefore
+   grows with `n`, which is the correct direction: a bigger sample has to be more extreme before
+   it is called a market.
+
+   **The gate:**
+
+   | Clause | Rule |
+   |---|---|
+   | Population | residential stock only (`RESIDENTIAL_USAGE`, `lib/config.py:129`), after the `build_area_median_index` exclusion chain and the `n >= MIN_AREA_ROWS` floor |
+   | Median band | every area's `median_rent` in **20,000 – 500,000** AED |
+   | Leak clause | every area's **`p95_rent` ≤ 1,000,000** AED |
+   | Sample | `n >= 10` published beside every figure |
+
+   Headroom, so a future reader can tell the clauses are tight rather than vacuous: the median
+   band clears the observed 28,000–280,000 by +40% / +44%, and the p95 ceiling clears the
+   observed worst p95 of 900,000 (Palm Jumeirah) by +11%. It is **not** infinite — a ceiling
+   below 900,000 fails today, and a residential area publishing a 700,000 median fails the
+   band clause. The clauses are red-capable, which is the point.
+
+   Why p95 rather than dropping the leak clause: the superseded note offered both. p95 has
+   discriminating power — 2 all-stock areas and any genuine portfolio (3 rows at 3M inside a
+   40-row residential area puts p95 at 3,000,000 while the median sits at 119,500) fail it.
+   Dropping the clause gates on nothing. `max_rent` stays **published** and ungated: it is
+   real, it is the number a reader wants, and it is simply the wrong statistic to threshold.
+
+   Two things this gate does not do, stated so the next reader does not assume otherwise.
+   It does not narrow the published index: `build_area_median_index` still emits all stock,
+   because an index that silently drops commercial areas is a different product from the one
+   consumers read. And the 18 areas that survive `n >= 10` on all stock but not on residential
+   stock (103 vs 121) are **ungated** — the gate covers 85% of the published areas, and the
+   remaining 15% are small-sample areas whose medians are not defensible at any threshold.
+
+   Defined in code at `lib/analysis/gold_indexes.py` (`GATE_MEDIAN_FLOOR_AED`,
+   `GATE_MEDIAN_CEILING_AED`, `GATE_P95_CEILING_AED`, `build_residential_market_index`) and
+   asserted in `tests/test_gold_indexes.py`. The old clause's `pytest.mark.xfail(strict=True)`
+   is gone: it was a canary for an unachievable gate, and a canary on a dead gate is the
+   opposite of a signal.
 
 Both are small, localised fixes. Neither is in scope for the Silver contract, but the marts are not
 safe to build until they land.
@@ -372,13 +474,13 @@ safe to build until they land.
 | `lib/classes/validators.py` | Remove pydantic import and `BronzeRentContract`; shed the three per-row range checks; keep aggregate checks |
 | `lib/transform/rents_transformer.py` | `encoding="utf-8-lossy"` → strict `"utf-8"` (`:22`); repoint `contract_id` alias to `record_id` (`:53`) |
 | `run_etl_pipeline.py` | Narrow `except Exception` at `:139` so an import failure can no longer masquerade as a passing gate; invoke `to_silver()` in `transform_rents()`, overwriting the same parquet |
-| `lib/config.py` | Remove `contract_id` from `required_fields` (`:190`); single `SHORT_TERM_DAYS = 300` constant reconciling the 180/365/300 thresholds |
+| `lib/config.py` | Remove `contract_id` from `required_fields` (`:190`). Add a `200`-sqft reporting floor and one shared `psf_band_filter`. **Not** a `SHORT_TERM_DAYS` constant: the 180/365/300 reconciliation is descoped, see §2.2 |
 | `tests/test_silver_contract.py` | **New.** Import smoke test, construction test, coercion counts, key cardinality, area-unit guard, reconciliation check |
 | `pyproject.toml` | pydantic stays (added in the uncommitted change, `:25`) |
 | `requirements.txt` | Add `pydantic>=2`; remove orphan `psutil` (in `requirements.txt` but not `pyproject.toml`) |
 | `docs/IMPLEMENTATION_PLAN.md` | Add ADR-06 (pydantic); record the 10.4% PSF-eligible rate against the P0 exit gate at `:31`; reconcile Phase 0/2 status against what already shipped |
-| `README.md` | Correct the pydantic description at `:43` — it is a Silver contract model, not "typed analysis result models" |
-| `lib/classes/property_usage.py` | Read the enriched `price_per_sqft` instead of re-deriving PSF at `:90-96` (Gold prerequisite 1) |
+| `README.md` | Add the missing pydantic line to the Stack list. The Stack list had **no** pydantic entry at all, so there is no `:43` description to correct — the earlier draft of this row claimed otherwise and was wrong |
+| `lib/classes/property_usage.py` | Read Silver's `rent_per_sqft` instead of re-deriving PSF at `:90-96` (Gold prerequisite 1). Not the enriched `price_per_sqft`: that is `enrichment.py`'s separate column, guarded by its own `200` literal, and reading it would re-import the second computation site this prerequisite exists to remove |
 | `lib/analysis/area_median_index` | Apply `is_bulk_registration` and the Hotel / Labor Camps / Virtual Unit exclusion; publish `median_rent` as the headline (Gold prerequisite 2) |
 
 No new artifact is produced. The typed frame overwrites the existing
@@ -411,7 +513,11 @@ Verification is runnable and each command is falsifiable:
     **AED 265,671,900**
 11. No `rent_per_sqm` in `lib/`, `tests/` or `lib/analysis/*.sql`; Gold prerequisite 1 verified by
     `property_usage_*.csv` Residential `median_psf` landing in 20–500 or null
-12. `area_median_index` has 0 rows with `max_rent > 1_000_000` and `median_rent` within 20k–500k
+12. The market-health gate of **§3.7.1** — `build_residential_market_index` over
+    `output/rents_silver_pooled.parquet` has every residential `median_rent` in 20k–500k and every
+    `p95_rent` ≤ 1M, measured at 103 areas, 28,000–280,000 and a worst p95 of 900,000. This
+    replaces the `max_rent > 1_000_000` clause, which 26 of 121 areas fail and which no filter
+    can satisfy
 
 ---
 
@@ -445,7 +551,7 @@ Verification is runnable and each command is falsifiable:
 | `record_id` not stable across gateway reordering | Documented in the docstring. Cross-day dedup uses `row_hash`, which is stable. `count(fact) == sum CSVs` is unaffected |
 | Dropping 3 Arabic columns is irreversible | `VERSION_AR` and `IS_FREE_HOLD_AR` are 100% `?`-masked — the bytes never reached the payload, so there is no data to lose. `MASTER_PROJECT_AR` is a different case: 4 of 16,075 rows hold real unmasked Arabic, so 4 genuine values *are* discarded, deliberately, for want of a downstream reader. Recorded in `dropped_columns` with reasons; revisit if one appears |
 | `validators.py` loses range coverage if the split is botched | Gates 1 and 7 assert both modules still report; thresholds come from one dict |
-| The 10.4% PSF-eligible rate is read as a regression | Recorded against `IMPLEMENTATION_PLAN.md:31` so the P0 gate's `avg_psf 45-110` expectation is not applied to a 443-row sample |
+| The 7.4–10.3% PSF-eligible rate is read as a regression | Recorded against `IMPLEMENTATION_PLAN.md:31` so the P0 gate's `avg_psf 45-110` expectation is not applied to a few-hundred-row sample |
 
 ---
 

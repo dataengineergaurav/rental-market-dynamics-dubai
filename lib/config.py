@@ -5,8 +5,10 @@ This module contains all configuration settings, constants, and market-specific
 parameters for analyzing Dubai rental market data.
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict
 from enum import Enum
+
+import polars as pl
 
 
 # DLD Data Schema - Actual Column Names
@@ -192,12 +194,6 @@ DATA_QUALITY_RULES = {
         "annual_amount",
     ],
     
-    "numeric_fields": [
-        "annual_amount",
-        "contract_amount",
-        "no_of_prop",
-    ],
-    
     "date_fields": [
         "contract_start_date",
         "contract_end_date",
@@ -267,3 +263,39 @@ def is_commercial(usage: str) -> bool:
         True if commercial, False otherwise
     """
     return usage in COMMERCIAL_USAGE
+
+
+def psf_band_filter(psf_column: str = "psf"):
+    """Polars expression: keep a PSF only if it sits inside the validity band for
+    its usage class. The area floor is NOT applied here — Silver already nulls
+    PSF below PSF_MIN_AREA_SQFT, and repeating it is what previously let
+    avg_psf 4691 ship (output/property_usage_20260913.csv).
+
+    This is a publishing decision, not a computation: a 200+ sqft unit at
+    8228 AED/sqft is a real registration, so Silver keeps it and Gold declines
+    to report it. PropertyUsage and MarketAnalytics share this helper, so the
+    BAND is defined once.
+
+    The AREA FLOOR is not shared, and there are three PSF computation sites, not
+    two: silver_contract.py:189 (behind PSF_MIN_AREA_SQFT, the reporting floor
+    this helper's docstring refers to), market_analytics.py:82 and
+    enrichment.py:94, each still carrying its own `200` literal. Follow-up: have
+    the latter two read Silver's rent_per_sqft and delete two divisions and two
+    literals. Do not describe the surfaces as unable to disagree until that lands.
+    """
+    return (
+        (
+            pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)
+            & pl.col(psf_column).is_between(
+                VALIDATION_THRESHOLDS["min_psf_residential"],
+                VALIDATION_THRESHOLDS["max_psf_residential"],
+            )
+        )
+        | (
+            pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)
+            & pl.col(psf_column).is_between(
+                VALIDATION_THRESHOLDS["min_psf_commercial"],
+                VALIDATION_THRESHOLDS["max_psf_commercial"],
+            )
+        )
+    )

@@ -66,6 +66,152 @@ def test_bulk_flag_detection():
     assert not enriched.filter(pl.col("annual_amount") == 50000)["is_bulk_registration"].any()
 
 
+def test_property_usage_psf_respects_the_200_sqft_floor(tmp_path):
+    """PSF must be READ from Silver's rent_per_sqft, never recomputed.
+
+    Recomputing annual_amount/actual_area bypassed the >=200 floor and shipped
+    Residential avg_psf 4691 (output/property_usage_20260913.csv), 9x the top of
+    the plausible band.
+
+    The 150 sqft row is the load-bearing one: rent/area is 100 AED/sqft, INSIDE
+    the 20-500 band, so the band cannot be what excludes it — only the area
+    floor can. Hence the exact-equality assert, not just the band check.
+    """
+    from lib.classes.silver_contract import to_silver
+    from lib.classes.property_usage import PropertyUsage
+
+    silver = to_silver(pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 3,
+        "property_usage_en": ["Residential"] * 3,
+        "annual_amount": [100000, 15000, 300000],
+        "actual_area": [1.0, 150.0, 1000.0],
+        "RN": [1, 2, 3],
+    })).frame
+    assert silver["rent_per_sqft"].to_list()[:2] == [None, None], (
+        "fixture is wrong: the two sub-200 sqft rows must already be nulled by Silver"
+    )
+
+    src = tmp_path / "silver.parquet"
+    out = tmp_path / "property_usage.csv"
+    silver.write_parquet(src)
+    PropertyUsage(str(out)).transform(str(src))
+
+    avg_psf = pl.read_csv(out)["avg_psf"][0]
+    assert avg_psf is not None, "PSF dropped entirely instead of being guarded"
+    assert 20 <= avg_psf <= 500, f"avg_psf {avg_psf} outside the 20-500 band"
+    assert avg_psf == 300.0, (
+        f"avg_psf {avg_psf}: sub-200 sqft rows contributed. Only the 1000 sqft "
+        "row is PSF-eligible, so the mean must be exactly its own PSF"
+    )
+
+
+def test_property_usage_omits_psf_when_the_column_is_absent(tmp_path):
+    """A pre-Silver parquet carries actual_area but no rent_per_sqft. The report
+    must still be written, with no PSF columns — never a recomputed PSF, which
+    is the bug this whole guard exists to prevent."""
+    from lib.classes.property_usage import PropertyUsage
+
+    src = tmp_path / "legacy.parquet"
+    out = tmp_path / "property_usage.csv"
+    pl.DataFrame({
+        "property_usage_en": ["Residential", "Residential"],
+        "annual_amount": [100000.0, 300000.0],
+        "actual_area": [1.0, 1000.0],
+    }).write_parquet(src)
+    PropertyUsage(str(out)).transform(str(src))
+
+    report = pl.read_csv(out)
+    assert "avg_psf" not in report.columns
+    assert "avg_area_sqft" in report.columns, "the rest of the report must survive"
+
+
+def test_both_psf_surfaces_share_one_band_rule(tmp_path):
+    """psf_band_filter is the single publishing rule, so MarketAnalytics and
+    PropertyUsage cannot disagree about what is reportable.
+
+    The 600 AED/sqft row is load-bearing and is at 1000 sqft, so the 200 sqft
+    floor cannot be what excludes it — only the band can. Both surfaces
+    recompute differently (MarketAnalytics divides annual_amount/actual_area,
+    PropertyUsage reads Silver's rent_per_sqft) and must still land on 200.
+    """
+    from lib.classes.market_analytics import MarketAnalytics
+    from lib.classes.property_usage import PropertyUsage
+    from lib.classes.silver_contract import to_silver
+    from lib.config import psf_band_filter
+
+    probe = pl.DataFrame({
+        "property_usage_en": ["Residential", "Residential"],
+        "psf": [600.0, 200.0],
+    })
+    assert probe.filter(psf_band_filter("psf"))["psf"].to_list() == [200.0], (
+        "the helper itself must reject 600 and accept 200 for Residential"
+    )
+
+    silver = to_silver(pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 2,
+        "property_usage_en": ["Residential"] * 2,
+        "annual_amount": [200000, 600000],
+        "actual_area": [1000.0, 1000.0],
+        "RN": [1, 2],
+    })).frame
+    # both rows clear the 200 sqft floor, so the floor is NOT what filters them
+    assert silver["rent_per_sqft"].to_list() == [200.0, 600.0]
+
+    src = tmp_path / "silver.parquet"
+    out = tmp_path / "property_usage.csv"
+    silver.write_parquet(src)
+
+    ma_psf = sorted(MarketAnalytics(silver).calculate_psf_metrics()["psf"].to_list())
+    assert ma_psf == [200.0], f"MarketAnalytics kept {ma_psf}, expected only 200"
+
+    PropertyUsage(str(out)).transform(str(src))
+    pu_psf = pl.read_csv(out)["avg_psf"].to_list()
+    assert pu_psf == [200.0], f"PropertyUsage reported {pu_psf}, expected only 200"
+
+
+def test_sub_200_sqft_rows_are_excluded_even_when_their_psf_is_inside_the_band(tmp_path):
+    """Pins the 200 area floor, which is a SECOND literal and not the shared band.
+
+    Neither existing PSF test covers it: test_market_analytics_psf_filter's
+    small row sits at 2000 AED/sqft (out of band, so the band is what removes it)
+    and test_both_psf_surfaces_share_one_band_rule puts both rows at 1000 sqft and
+    says so. So deleting the floor clause, or changing 200 to 50, left the suite
+    green.
+
+    The 150 sqft row is the load-bearing one: 15000/150 = 100 AED/sqft, comfortably
+    INSIDE the 20-500 band, so the band cannot be what excludes it. Only the area
+    floor can. Both surfaces are checked because the floor reaches them by two
+    unrelated routes — MarketAnalytics carries its own literal, PropertyUsage
+    inherits Silver's already-nulled rent_per_sqft.
+    """
+    from lib.classes.market_analytics import MarketAnalytics
+    from lib.classes.property_usage import PropertyUsage
+    from lib.classes.silver_contract import to_silver
+
+    silver = to_silver(pl.DataFrame({
+        "area_name_en": ["Dubai Marina"] * 2,
+        "property_usage_en": ["Residential"] * 2,
+        "annual_amount": [15000, 300000],
+        "actual_area": [150.0, 1000.0],
+        "RN": [1, 2],
+    })).frame
+    # the fixture is only meaningful if the sub-200 row is INSIDE the band
+    assert 20 <= 15000 / 150 <= 500, "fixture is wrong: the 150 sqft row must be in-band"
+    assert silver["rent_per_sqft"].to_list() == [None, 300.0], (
+        "fixture is wrong: the 150 sqft row must already be nulled by Silver"
+    )
+
+    ma_psf = MarketAnalytics(silver).calculate_psf_metrics()["psf"].to_list()
+    assert ma_psf == [300.0], f"MarketAnalytics kept {ma_psf}, expected only 300"
+
+    src = tmp_path / "silver.parquet"
+    out = tmp_path / "property_usage.csv"
+    silver.write_parquet(src)
+    PropertyUsage(str(out)).transform(str(src))
+    pu_psf = pl.read_csv(out)["avg_psf"].to_list()
+    assert pu_psf == [300.0], f"PropertyUsage reported {pu_psf}, expected only 300"
+
+
 def test_validator_gate_no_crash_on_small_df():
     df = pl.DataFrame({
         "contract_id": [1, 2],

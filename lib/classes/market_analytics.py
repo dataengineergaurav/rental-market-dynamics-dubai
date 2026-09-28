@@ -6,15 +6,12 @@ including price per square foot calculations, trend analysis, and market segment
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
-from datetime import date, datetime
+from typing import Dict
 import polars as pl
 
 from lib.config import (
-    COMMERCIAL_USAGE,
     MARKET_METRICS,
-    RESIDENTIAL_USAGE,
-    VALIDATION_THRESHOLDS,
+    psf_band_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,20 +81,17 @@ class MarketAnalytics:
             (pl.col("annual_amount") / pl.col("actual_area")).alias("psf")
         )
         
-        # Filter outliers
-        min_psf_res = VALIDATION_THRESHOLDS["min_psf_residential"]
-        max_psf_res = VALIDATION_THRESHOLDS["max_psf_residential"]
-        min_psf_com = VALIDATION_THRESHOLDS["min_psf_commercial"]
-        max_psf_com = VALIDATION_THRESHOLDS["max_psf_commercial"]
-        
-        psf_data = psf_data.filter(
-            ((pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)) &
-             (pl.col("psf") >= min_psf_res) &
-             (pl.col("psf") <= max_psf_res)) |
-            ((pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)) &
-             (pl.col("psf") >= min_psf_com) &
-             (pl.col("psf") <= max_psf_com))
-        )
+        # Filter outliers. The BAND is one shared rule, not two copies of it:
+        # lib.config.psf_band_filter is the same expression PropertyUsage reads,
+        # so the two agree on what is reportable.
+        #
+        # The 200 area floor above is a SECOND literal and is NOT shared with
+        # PropertyUsage, which has no floor at all because Silver already nulled
+        # rent_per_sqft below it. This module also re-divides rather than reading
+        # that column, so it is one of three PSF computation sites (with
+        # silver_contract.py:189 and enrichment.py:94), each carrying its own 200.
+        # Follow-up: read rent_per_sqft and drop the literal.
+        psf_data = psf_data.filter(psf_band_filter("psf"))
         
         logger.info(f"Calculated PSF for {psf_data.height:,} records")
         
