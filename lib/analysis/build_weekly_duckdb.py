@@ -6,12 +6,12 @@ Usage:
   uv run python -m lib.analysis.build_weekly_duckdb --from 20260913 --to 20260917
 
 Output: output/rental_analytics_weekly_2026W37.duckdb
- Tables: fact_rental_contract (enriched, P0-hardened), views: gold_area_median, gold_standard_lease
+ Tables: fact_rental_contract (enriched, P0-hardened),
+ views: gold_area_median, gold_standard_lease, gold_top_metros_daily
 """
 from __future__ import annotations
 
 import argparse
-import calendar
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import logging
@@ -22,6 +22,23 @@ import polars as pl
 from lib.transform.enrichment import enrich_rent_contracts
 
 logger = logging.getLogger(__name__)
+
+GOLD_TOP_METROS_DAILY_SQL = """
+CREATE OR REPLACE VIEW gold_top_metros_daily AS
+SELECT
+    nearest_metro_en AS nearest_metro,
+    DATE(contract_registration_date) AS contract_reg_date,
+    COUNT(rn) AS number_of_rent_contracts,
+    RANK() OVER (
+        PARTITION BY DATE(contract_registration_date)
+        ORDER BY COUNT(rn) DESC
+    ) AS contract_rank
+FROM fact_rental_contract
+WHERE nearest_metro_en IS NOT NULL
+GROUP BY nearest_metro, contract_reg_date
+QUALIFY contract_rank <= 3
+ORDER BY contract_reg_date DESC, contract_rank ASC
+"""
 
 
 def week_to_dates(week: str) -> tuple[date, date]:
@@ -139,6 +156,7 @@ def build_weekly_duckdb(week: str | None = None, from_date: str | None = None, t
           AND ejari_property_type_en != 'Virtual Unit'
           AND is_bulk_registration = false
     """)
+    con.execute(GOLD_TOP_METROS_DAILY_SQL)
     # meta
     con.execute(f"CREATE OR REPLACE VIEW _meta AS SELECT '{week}' AS week, '{start}' AS week_start, '{end}' AS week_end, {enriched.height} AS pooled_rows, {len(files)} AS daily_files")
     con.close()
