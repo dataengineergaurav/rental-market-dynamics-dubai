@@ -14,6 +14,8 @@ from lib.extract.ejari_rents_downloader import EjariRentsDownloader
 from lib.transform.rents_transformer import RentsTransformer
 from lib.classes.property_usage import PropertyUsage
 from lib.classes.validators import RentContractValidator, validate_rent_contracts
+from lib.classes.silver_contract import SilverRentContract
+from lib.config import DATA_QUALITY_RULES
 
 import pytest
 import requests_mock
@@ -300,12 +302,26 @@ class TestValidators:
     
     def test_validate_required_fields(self):
         """Test required fields validation."""
-        # Test with missing required field
-        df_missing_field = self.test_df.drop('contract_id')
+        # contract_id is NOT required any more: it is 100% null in every daily
+        # file, so the frame that dropped only that column is valid. Drop a
+        # field that is still required.
+        df_missing_field = self.test_df.drop('annual_amount')
         result = self.validator.validate_dataframe(df_missing_field)
-        
+
         assert not result.is_valid
         assert any("Missing required columns" in error for error in result.errors)
+
+    def test_contract_id_is_not_required(self):
+        """contract_id left required_fields when it was found 100% null everywhere.
+
+        It is the column most likely to regress, because it still exists in the
+        test frame and in the raw payload — just as an all-null column.
+        """
+        assert 'contract_id' not in DATA_QUALITY_RULES['required_fields']
+        result = self.validator.validate_dataframe(self.test_df.drop('contract_id'))
+        assert not any(
+            "Missing required columns" in error for error in result.errors
+        )
     
     def test_validate_rent_amounts(self):
         """Test rent amount validation."""
@@ -361,8 +377,24 @@ class TestETLPipelineIntegration:
         mock_downloader = Mock()
         mock_downloader.run.return_value = True
         mock_downloader_class.return_value = mock_downloader
+
+        # transform_rents re-reads the parquet and runs the Silver contract on it,
+        # so a "successful" transform that writes no file is now a hard failure
+        # rather than a logged skip. The mock has to honour the real contract.
+        # The paths are constructor args, so read the output path off the class
+        # mock (already called by the time transform() runs).
+        def write_parquet():
+            output_parquet = mock_transformer_class.call_args[0][1]
+            pl.DataFrame({
+                "area_name_en": ["Bur Dubai"],
+                "property_usage_en": ["Residential"],
+                "actual_area": [1200.0],
+                "annual_amount": [90000.0],
+            }).write_parquet(output_parquet)
+            return True
+
         mock_transformer = Mock()
-        mock_transformer.transform.return_value = True
+        mock_transformer.transform.side_effect = write_parquet
         mock_transformer_class.return_value = mock_transformer
         mock_property_usage = Mock()
         mock_property_usage_class.return_value = mock_property_usage
@@ -421,6 +453,111 @@ class TestETLPipelineIntegration:
         mock_downloader_class.assert_called_once_with(self.test_url)
         mock_downloader.run.assert_called_once_with(self.csv_filename)
     
+    def test_transform_rents_runs_the_silver_contract(self, tmp_path):
+        """transform_rents must run to_silver and rewrite the parquet.
+
+        Uses a synthetic CSV: .gitignore excludes **.csv, so a test reading
+        output/ would pass vacuously in CI — and a skipped gate is exactly the
+        failure mode this task exists to close.
+        """
+        import run_etl_pipeline
+
+        csv = tmp_path / "rent_contracts_20260917.csv"
+        parquet = tmp_path / "rent_contracts_20260917.parquet"
+        n = 60
+        pl.DataFrame({
+            "RN": list(range(1, n + 1)),
+            "AREA_EN": ["Dubai Marina"] * n,
+            "USAGE_EN": ["Residential"] * n,
+            "PROP_TYPE_EN": ["Unit"] * n,
+            "PROP_SUB_TYPE_EN": ["Flat"] * n,
+            "START_DATE": ["2026-09-20T00:00:00"] * n,
+            "END_DATE": ["2027-09-19T00:00:00"] * n,
+            # non-midnight on purpose: this is the field infer_schema_length=None
+            # exists for. On the real payload it made polars' 100-row schema
+            # inference fail at row 101 on 20260916 (Task 4), and it also
+            # exercises the _CASTS date cast in silver_contract.
+            "REGISTRATION_DATE": ["2026-09-12T00:03:07"] * n,
+            "ANNUAL_AMOUNT": [90000.0] * n,
+            "CONTRACT_AMOUNT": [90000.0] * n,
+            "ACTUAL_AREA": [900.0] * n,
+            "IS_FREE_HOLD": [1] * n,
+            "VERSION_EN": ["New"] * n,
+            "TOTAL_PROPERTIES": [1] * n,
+        }).write_csv(csv)
+
+        ok = run_etl_pipeline.transform_rents(str(csv), str(parquet))
+        assert ok is True
+
+        # the Silver contract must have rewritten the parquet
+        assert parquet.exists()
+        written = pl.read_parquet(parquet)
+        assert written.height == n, "one row per input row (ADR-02 grain preserved)"
+        assert written["record_id"].n_unique() == n
+        assert "violations" in written.columns
+        assert "contract_id" not in written.columns, "CONTRACT_NUMBER is 100% null; alias removed"
+        assert set(written.columns) == set(SilverRentContract.model_fields)
+
+    def test_transform_rents_does_not_swallow_a_broken_silver_import(self, tmp_path):
+        """The P0.3 incident was an IMPORT failure — a module-level NameError
+        that the old `except Exception` logged as 'Validation gate skipped' and
+        then returned True. Patching the module OBJECT, not the attribute,
+        intercepts the import itself, which is the path that actually broke.
+
+        `patch("lib.classes.silver_contract")` does NOT work here: it rebinds
+        the attribute on the `lib.classes` package, but `from X import Y` inside
+        a function resolves X through sys.modules, so the patch is bypassed and
+        the real module is imported. Poisoning the sys.modules entry is what
+        actually fails the import.
+        """
+        import sys
+        from unittest.mock import patch
+        import run_etl_pipeline
+
+        csv = tmp_path / "in.csv"
+        parquet = tmp_path / "out.parquet"
+        pl.DataFrame({
+            "AREA_EN": ["Dubai Marina"], "USAGE_EN": ["Residential"],
+            "ANNUAL_AMOUNT": [90000.0], "ACTUAL_AREA": [900.0],
+            "START_DATE": ["2026-09-20T00:00:00"], "END_DATE": ["2027-09-19T00:00:00"],
+        }).write_csv(csv)
+
+        # None in sys.modules is the standard "this import cannot be satisfied"
+        # state. Whether a module-level NameError surfaces as ImportError or as
+        # the original NameError is immaterial here: what is pinned is that the
+        # import is on the propagating path, not behind a swallow.
+        with patch.dict(sys.modules, {"lib.classes.silver_contract": None}):
+            with pytest.raises(ImportError):
+                run_etl_pipeline.transform_rents(str(csv), str(parquet))
+
+    def test_transform_rents_does_not_swallow_a_broken_silver_contract(self, tmp_path):
+        """The old code wrapped validation in except Exception and logged
+        'Validation gate skipped', then returned True. That is how a module-level
+        NameError shipped as a passing P0.3 gate. A broken Silver contract must
+        propagate.
+
+        Patched rather than editing the module: this asserts the SHAPE of the
+        call path, not the contents of silver_contract.py, so it stays runnable
+        in a checkout where that module is fine.
+        """
+        from unittest.mock import patch
+        import run_etl_pipeline
+
+        csv = tmp_path / "in.csv"
+        parquet = tmp_path / "out.parquet"
+        pl.DataFrame({
+            "AREA_EN": ["Dubai Marina"], "USAGE_EN": ["Residential"],
+            "ANNUAL_AMOUNT": [90000.0], "ACTUAL_AREA": [900.0],
+            "START_DATE": ["2026-09-20T00:00:00"], "END_DATE": ["2027-09-19T00:00:00"],
+        }).write_csv(csv)
+
+        # the local `from lib.classes.silver_contract import to_silver` inside
+        # transform_rents resolves the module attribute at call time, so this
+        # patch is what the function actually calls.
+        with patch("lib.classes.silver_contract.to_silver", side_effect=ImportError("boom")):
+            with pytest.raises(ImportError):
+                run_etl_pipeline.transform_rents(str(csv), str(parquet))
+
     @patch.dict(os.environ, {'GH_TOKEN': 'test_token'})
     @patch('run_etl_pipeline.GitHubRelease')
     @patch('run_etl_pipeline.os.path.exists', return_value=True)

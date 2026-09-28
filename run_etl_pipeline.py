@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from lib.extract.ejari_rents_downloader import EjariRentsDownloader  # kept for test patch compatibility
 from lib.transform.rents_transformer import RentsTransformer
 from lib.classes.property_usage import PropertyUsage
+from lib.config import FILE_CONFIG
 from lib.workspace import GitHubRelease
 from lib.logging_helpers import get_logger, configure_root_logger
 
@@ -117,30 +118,47 @@ def download_rents(url: str, filename: str, from_date: str | None = None, to_dat
 
 
 def transform_rents(input_csv: str, output_parquet: str) -> bool:
-    """Transform rents CSV to Parquet."""
+    """Transform rents CSV to Parquet, then run the Silver contract.
+
+    The Silver import sits on the main path on purpose. It used to live inside
+    `except Exception` that logged "Validation gate skipped" and returned True,
+    which is how a module-level NameError shipped as a passing P0.3 gate. A
+    broken contract module must now fail the run, not be logged away.
+    """
     logger.info("=== PHASE 2: TRANSFORM ===")
     try:
-        if RentsTransformer(input_csv, output_parquet).transform():
-            logger.info(f"Transformation complete: {output_parquet}")
-            # P0.3 fail-open validation gate (logs, never blocks)
-            try:
-                import polars as pl
-                from lib.classes.validators import validate_rent_contracts
-                df = pl.read_parquet(output_parquet)
-                # null unusable area <200 for PSF safety (enrichment also does this)
-                if "actual_area" in df.columns:
-                    tiny = df.filter(pl.col("actual_area") < 200).height
-                    if tiny:
-                        logger.warning(f"Validation: {tiny} rows with actual_area <200 will have null PSF")
-                result = validate_rent_contracts(df, strict=False)
-                logger.info(f"Validation gate: {result.get_summary()} | {result}")
-                if result.errors:
-                    logger.warning(f"Validation errors (fail-open): {result.errors[:3]}")
-            except Exception as ve:
-                logger.warning(f"Validation gate skipped: {ve}")
-            return True
-        logger.error("Transformation failed.")
-        return False
+        if not RentsTransformer(input_csv, output_parquet).transform():
+            logger.error("Transformation failed.")
+            return False
+        logger.info(f"Transformation complete: {output_parquet}")
+
+        import polars as pl
+        from lib.classes.silver_contract import to_silver
+
+        df = pl.read_parquet(output_parquet)
+        result = to_silver(df)
+        logger.info(f"Silver contract: {len(result)} rows validated")
+        # len(result) is frame.height, so without this the summary can overstate:
+        # a quarantined row is absent from the count AND from the parquet, and
+        # the log is the operator's only view of that.
+        if len(result.quarantined):
+            logger.warning(
+                f"Silver quarantined {len(result.quarantined)} rows that could not be "
+                f"validated; they are NOT in {output_parquet}. "
+                f"Validated {len(result)} of {df.height} input rows."
+            )
+        if result.violation_counts:
+            top = sorted(result.violation_counts.items(), key=lambda kv: -kv[1])[:5]
+            logger.info(f"Silver violations: {top}")
+
+        result.frame.write_parquet(
+            output_parquet,
+            # read from config so this writer cannot drift from RentsTransformer's
+            compression=FILE_CONFIG["parquet_compression"],
+            compression_level=FILE_CONFIG["parquet_compression_level"],
+        )
+        logger.info(f"Silver frame written: {output_parquet}")
+        return True
     except Exception as e:
         logger.error(f"Transformation failed with exception: {e}")
         raise

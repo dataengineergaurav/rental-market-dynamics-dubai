@@ -187,7 +187,6 @@ LOG_CONFIG = {
 # Data Quality Checks
 DATA_QUALITY_RULES = {
     "required_fields": [
-        "contract_id",
         "contract_start_date",
         "property_usage_en",
         "annual_amount",
