@@ -43,7 +43,6 @@ Orchestration is Make-driven locally and via GitHub Actions (daily ETL, weekly D
 - **DuckDB** for weekly analytics
 - **Scrapy** for Ejari extraction
 - **uv** (or pip) for dependencies
-- Optional **dbt-duckdb** scaffold under `analysis/`
 
 ## Setup
 
@@ -75,7 +74,6 @@ Daily entry point: `run_etl_pipeline.py`. Weekly analytics: `python -m lib.analy
 ```
 lib/              Extract, transform, enrichment, analytics, release helpers
 rents_scraper/    Scrapy spider for Ejari rents
-analysis/         Optional dbt-duckdb starter project
 output/           Daily CSVs, Parquet, weekly DuckDB artifacts
 tests/            Pipeline and data-quality gates
 docs/             Implementation plan, roadmap, library usage
