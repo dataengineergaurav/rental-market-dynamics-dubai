@@ -1,135 +1,69 @@
-# Dubai Rental Market Data Release
+# Dubai Rental Market Data — Release Notes
 
-**Release Date:** 2026-02-10  
-**Data Source:** Dubai Land Department (DLD)
+**Last updated:** 2026-10-05
+**Data source:** Dubai Land Department (DLD) — Ejari rent transactions
 
-## 📦 Data Artifacts
+This file describes the artifacts the pipeline currently publishes. Per-release history lives on
+[GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
 
-### 1. rent_contracts_silver_20260210.parquet (194 MB)
-**Single Source of Truth - Cleaned Data**
+## Artifacts
 
-Contains 9,749,606 rent contracts with:
-- Proper data types (BIGINT, DATE)
-- Parsed dates (contract_start_date, contract_end_date)
-- Data quality flags (_has_date_issues, _has_amount_issues)
-- Audit columns (_ingestion_timestamp, _source_file, _cleaned_timestamp)
+### Daily — `rent_contracts_YYYYMMDD.csv` (tag `release-YYYY-MM-DD`)
 
-**Use this for:**
-- Data analysis
-- Machine learning
-- Reporting
-- External tool integration
+Raw Ejari rent transactions for the day, extracted over an incremental 2-day window. One file per
+data date, contract-level columns as returned by the endpoint (unit area, annual and contract
+amounts, registration/start/end dates, area, property type/usage, nearest metro, parking, project).
 
-### 2. rental_data.db (1.5 GB)
-**Full DuckDB Database with Medallion Architecture**
+### Weekly — `rental_analytics_weekly_YYYYWxx.duckdb` (tag `release-week-YYYYWxx`)
 
-#### Bronze Layer (Raw)
-- `bronze.rent_contracts`: 9,749,606 rows
-- Raw CSV data with audit columns
+A 7-day Mon–Sun DuckDB built by `lib/analysis/build_weekly_duckdb.py`. Contents:
 
-#### Silver Layer (Cleaned)
-- `silver.rent_contracts`: 9,749,606 rows
-- Cleaned data with proper types
-- Quality flags for data issues
+| Object | Type | Description |
+|--------|------|-------------|
+| `fact_rental_contract` | table | Enriched, cross-file deduped contracts for the week |
+| `gold_area_median` | view | Per-area median/mean/min/max rent, `n >= 10`, market exclusions applied |
+| `gold_standard_lease` | view | Single Dubai-wide Flat benchmark, 180–365-day leases |
+| `gold_top_metros_daily` | view | Top-3 metros by contract count per registration day |
+| `_meta` | view | Week label, row counts and freshness provenance for the build |
 
-#### Gold Layer (Analytics)
-**Dimension Tables:**
-- `gold.dim_contract_type`: 8,137,572 rows
-- `gold.dim_date`: 1,100,213 rows
-- `gold.dim_location`: 101,020 rows
-- `gold.dim_project`: 1,637 rows
-- `gold.dim_property`: 833 rows
-- `gold.dim_tenant`: 2 rows
+## Data guarantees
 
-**Fact Table:**
-- `gold.fact_rent_contract`: 9,749,606 rows
-- Star schema with surrogate keys
+- **Cross-file dedup.** A registration can appear in two consecutive daily files (the extract window
+  is 2 days). The weekly build drops rows repeating a `row_hash` first seen in an earlier daily
+  file, so counts and medians are not double-counted. Within-file repeats — bulk registrations — are
+  preserved.
+- **Freshness gate.** The weekly build refuses to publish when a day in the window has no usable
+  daily CSV, or when the newest registration trails the window end.
+- **Medians over means**, with guards for bulk registrations and implausible unit areas, so headline
+  rent figures stay trustworthy. Hotel and Labor Camps sub-types and Virtual Unit property types are
+  excluded from area medians.
 
-**View:**
-- `gold.v_expiring_contracts_15d`: 43,505 rows
-- Contracts expiring in next 15 days (2026-02-10 to 2026-02-25)
+Inspect what a build was made of:
 
-## 🔍 Key Insights
-
-### Expiring Contracts (Next 15 Days): 43,505
-**By Property Usage:**
-- Residential: 26,444 contracts (avg AED 265,657)
-- Commercial: 16,726 contracts (avg AED 93,807)
-- Industrial: 232 contracts (avg AED 211,534)
-
-## 🚀 Quick Start
-
-### Using Parquet (Recommended for Analysis)
-```python
-import polars as pl
-
-# Read silver data
-df = pl.read_parquet("rent_contracts_silver_20260210.parquet")
-print(f"Total contracts: {len(df):,}")
+```sql
+SELECT * FROM _meta;
+-- week, week_start, week_end, pooled_rows, deduped_rows,
+-- row_hash_duplicates_removed, daily_files, expected_daily_files,
+-- missing_daily_files, data_through
 ```
 
-### Using DuckDB (Recommended for SQL Analytics)
+## Quick start
+
 ```python
 import duckdb
 
-conn = duckdb.connect("rental_data.db")
+con = duckdb.connect("rental_analytics_weekly_2026W37.duckdb", read_only=True)
 
-# Query expiring contracts
-result = conn.execute("""
-    SELECT * FROM gold.v_expiring_contracts_15d
-    WHERE property_usage_en = 'Residential'
-    ORDER BY days_until_expiry
-""").fetchall()
+# Area medians (n >= 10, exclusions applied)
+print(con.execute("SELECT * FROM gold_area_median ORDER BY median_rent DESC LIMIT 10").fetchall())
 
-# Query star schema
-result = conn.execute("""
-    SELECT 
-        dp.property_usage_en,
-        COUNT(*) as count,
-        AVG(f.annual_amount) as avg_rent
-    FROM gold.fact_rent_contract f
-    JOIN gold.dim_property dp ON f.property_key = dp.property_key
-    GROUP BY dp.property_usage_en
-""").fetchall()
+# Daily top-3 metros by contract volume
+print(con.execute("SELECT * FROM gold_top_metros_daily").fetchall())
 ```
 
-## 📊 Medallion Architecture
+## Notes
 
-```
-┌─────────────────────────────────────────────────────┐
-│  Bronze Layer (Raw)                                  │
-│  - Raw CSV data                                      │
-│  - Audit columns                                     │
-├─────────────────────────────────────────────────────┤
-│  Silver Layer (Cleaned)                              │
-│  - Proper data types                                 │
-│  - Date parsing                                      │
-│  - Quality flags                                     │
-├─────────────────────────────────────────────────────┤
-│  Gold Layer (Analytics)                              │
-│  - Star schema                                       │
-│  - Dimensions + Fact tables                          │
-│  - Virtual views                                     │
-└─────────────────────────────────────────────────────┘
-```
-
-## 📈 Storage Optimization
-
-- **Previous:** 3.9 GB (2.8 GB main + 1.1 GB expiring DB)
-- **Current:** 1.7 GB (1.5 GB DB + 0.2 GB parquet)
-- **Saved:** 2.2 GB (56% reduction)
-
-## 🔗 Repository
-
-Code and documentation: https://github.com/dataengineergaurav/rental-market-dynamics-dubai
-
-## 📄 License
-
-Data provided by Dubai Land Department (DLD) for public use.
-
-## 📝 Notes
-
-- Data covers rent contracts from 2019 to present
-- Contract dates are in DD-MM-YYYY format in source
-- Currency: UAE Dirham (AED)
-- All amounts are annual rent values
+- Daily artifacts are CSV; the weekly analytics database is DuckDB. Older releases described a
+  large star-schema database (`rental_data.db`) that the current pipeline does not build.
+- Currency: UAE Dirham (AED). Amounts are annual rent values.
+- Data is provided by the Dubai Land Department for public use.

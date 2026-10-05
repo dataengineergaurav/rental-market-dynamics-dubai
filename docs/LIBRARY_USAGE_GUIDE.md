@@ -88,7 +88,8 @@ result.violation_counts
 
 Derived fields it adds: `duration_days`, `is_short_term`, `monthly_rent`, `rent_per_sqft` (null
 unless `actual_area >= 200`), `implied_years`, `psf_eligible`, `row_hash` (stable, for cross-day
-dedup) and `record_id` (unique within a file). This is the surface `run_etl_pipeline.py` runs, and
+dedup — now actually applied at the weekly layer, which drops rows repeating an earlier daily file)
+and `record_id` (unique within a file). This is the surface `run_etl_pipeline.py` runs, and
 the one `lib/classes/validators.py` defers to for types and ranges.
 
 ### 3. Market Analytics (`lib/classes/market_analytics.py`)
