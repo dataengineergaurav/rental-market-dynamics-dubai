@@ -142,6 +142,27 @@ COMMERCIAL_USAGE = [
 ]
 
 
+# Weekly gold-build freshness gate.
+#
+# The daily job stays fail-open (ADR-03): a quiet day is not a failure, and the
+# pipeline should not page on one empty incremental window. A *week*, however,
+# is a different claim — it asserts it covers a Mon-Sun range from a complete set
+# of daily files. A week pooled from too few files, or whose newest registration
+# predates the range it claims, is stale: the daily feed has stalled and the
+# artifact must not publish as if it were current.
+#
+# The gate lives here, at the aggregation boundary, because that is where a
+# missing day stops being a quiet day and becomes a defect in the published
+# grain. Thresholds are read by build_weekly_duckdb; do not restate them there.
+WEEKLY_FRESHNESS_GATE = {
+    # Days in the requested window with no usable (present, non-empty) daily CSV.
+    "max_missing_daily_files": 0,
+    # How far the newest registration may trail the window end. 1 absorbs a
+    # filename/data-date off-by-one; a 2+ day lag is a stall.
+    "max_contract_date_lag_days": 1,
+}
+
+
 # Market Metrics Configuration
 MARKET_METRICS = {
     # Percentile thresholds for luxury classification

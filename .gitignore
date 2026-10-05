@@ -15,6 +15,7 @@ build
 **.lock
 output/rental_analytics_*.duckdb
 output/rents_silver_*.parquet
+output/etl_status.json
 # local agent bundle & internal docs — not public
 SKILL.md
 docs/EXPERT_REVIEW_AND_ROADMAP.md

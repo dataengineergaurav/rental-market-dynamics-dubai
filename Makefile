@@ -46,8 +46,10 @@ etl:
 
 # Weekly: 7-day Mon-Sun pooled DuckDB from Releases daily CSVs
 weekly:
-	@echo "Building weekly DuckDB (Mon-Sun pooled, 7d)..."
-	uv run python -m lib.analysis.build_weekly_duckdb --from 20260915 --to 20260921 || uv run python -m lib.analysis.build_weekly_duckdb --from 20260913 --to 20260919
+	@echo "Building weekly DuckDB (previous complete ISO week)..."
+	@WEEK=$$(python3 -c "from datetime import date,timedelta; d=date.today()-timedelta(days=7); y,w,_=d.isocalendar(); print(f'{y}W{w:02d}')"); \
+	echo "Week $$WEEK"; \
+	uv run python -m lib.analysis.build_weekly_duckdb --week $$WEEK
 
 weekly-publish: weekly
 	@echo "Publishing weekly DuckDB to GitHub Release (weekly tag)..."

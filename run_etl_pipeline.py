@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import glob
+import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,48 @@ def _incremental_window(output_dir: Path) -> tuple[str, str]:
     to_date = f"{today.month:02d}/{today.day:02d}/{today.year}"
     logger.info(f"Incremental window: {from_date} -> {to_date} (data date: {from_date})")
     return from_date, to_date
+
+
+def _data_rows(csv_path: str | Path) -> int:
+    """Count data rows (excluding header) in a daily CSV; 0 for missing/placeholder.
+
+    Named so the run-status record and the control flow cannot disagree about
+    what "no new data" means. The `< 100` byte and header-only checks are the
+    same heuristic the pipeline already used inline — a placeholder `touch()`ed
+    by the downloader yields 0, not 1.
+    """
+    p = Path(csv_path)
+    try:
+        if not p.exists() or p.stat().st_size < 100:
+            return 0
+        with open(p) as f:
+            return max(sum(1 for _ in f) - 1, 0)
+    except OSError:
+        return 0
+
+
+def _write_run_status(output_dir: Path, *, outcome: str, data_date: str, from_date: str, to_date: str, data_rows: int) -> None:
+    """Persist one status record per run. Best-effort: never fails the pipeline.
+
+    The daily job stays fail-open (ADR-03) — `outcome="no_data"` is still a
+    success — but it is now an explicit, greppable record instead of a silent
+    empty run. Enforcement for a stalled feed lives at the aggregation boundary
+    (WEEKLY_FRESHNESS_GATE in lib/config.py), where a missing day stops being a
+    quiet day and becomes a defect in the published week.
+    """
+    payload = {
+        "run_utc": datetime.now(timezone.utc).isoformat(),
+        "outcome": outcome,  # "data" | "no_data"
+        "data_date": data_date,
+        "window_from": from_date,
+        "window_to": to_date,
+        "data_rows": data_rows,
+    }
+    try:
+        output_dir.mkdir(exist_ok=True)
+        (output_dir / "etl_status.json").write_text(json.dumps(payload, indent=2))
+    except OSError as e:
+        logger.warning(f"Could not write run status: {e}")
 
 
 def download_rents(url: str, filename: str, from_date: str | None = None, to_date: str | None = None) -> bool:
@@ -229,25 +272,30 @@ def main():
     parquet_filename = str(output_dir / f'rent_contracts_{date_str}.parquet')
     property_usage_report = str(output_dir / f'property_usage_{date_str}.csv')
 
+    # computed once so the download and the run-status record share one window
+    from_date, to_date = _incremental_window(output_dir)
+
     try:
-        if not download_rents(url, str(csv_filename)):
+        if not download_rents(url, str(csv_filename), from_date=from_date, to_date=to_date):
             logger.error("Pipeline stopped at Download phase.")
             return False
 
-        # incremental: if csv is empty/placeholder (no new rows), skip transform
-        try:
-            if os.path.getsize(csv_filename) < 100:
-                logger.warning(f"No new data in {csv_filename} (size {os.path.getsize(csv_filename)}), skipping transform/analyze for incremental window")
-                logger.info("=" * 60)
-                logger.info("ETL PIPELINE COMPLETED — NO NEW DATA (incremental)")
-                logger.info("=" * 60)
-                return True
-            with open(csv_filename) as f:
-                if sum(1 for _ in f) <= 1:
-                    logger.warning(f"No data rows in {csv_filename}, skipping transform")
-                    return True
-        except FileNotFoundError:
-            pass
+        # incremental: an empty/placeholder CSV means no new rows — successful,
+        # but recorded explicitly rather than returning silently (ADR-03 keeps
+        # this fail-open; the weekly builder is where a stall becomes a defect).
+        # A MISSING file is deliberately not this case: download_rents guarantees
+        # a file via touch(), so absence is an anomaly that must reach transform
+        # and fail, not be reported as a quiet day.
+        if Path(csv_filename).exists() and _data_rows(csv_filename) == 0:
+            logger.warning(
+                f"NO_NEW_DATA: window {from_date} -> {to_date} produced no registrations "
+                f"({csv_filename} is empty or a placeholder); skipping transform/analyze"
+            )
+            _write_run_status(output_dir, outcome="no_data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=0)
+            logger.info("=" * 60)
+            logger.info("ETL PIPELINE COMPLETED — NO NEW DATA (incremental)")
+            logger.info("=" * 60)
+            return True
 
         # CSV-only incremental: keep parquet/report for local but publish CSV
         transform_ok = transform_rents(str(csv_filename), parquet_filename)
@@ -266,6 +314,8 @@ def main():
             publish_artifacts_to_github([str(csv_filename)])
         else:
             logger.info("Skipping GitHub publication (GH_TOKEN not set)")
+
+        _write_run_status(output_dir, outcome="data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=_data_rows(csv_filename))
 
         logger.info("=" * 60)
         logger.info("ETL PIPELINE COMPLETED SUCCESSFULLY")
