@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Push builds no longer run the ETL.** `build_and_deploy.yml` runs `make build && make test`
+  instead of `make all`, so pushing to `main`/`dev` (or a tag) no longer re-extracts the
+  current window and clobbers the day's bronze release. Releases are written only by the
+  scheduled `cron.yml` and `daily_layers.yml`.
 - **Daily cumulative combined layers store.** Silver and Gold now live in ONE cumulative DuckDB
   (`rents_layers.duckdb`, tag `release-YYYY-MM-DD`) updated daily by upserting the day's
   contracts on a `contract_id` primary key; the Gold views resolve in the same file with no
