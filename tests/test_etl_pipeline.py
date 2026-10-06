@@ -47,6 +47,26 @@ class TestGitHubRelease:
         file_path.write_text("Test content")
         requests_mock.post(self.mock_release["upload_url"].split("{")[0] + "?name=test_file.txt", status_code=201)
         self.github_release.upload_files(self.mock_release, [str(file_path)])
+
+    def test_upload_files_clobbers_an_existing_asset(self, requests_mock, tmp_path):
+        """An asset of the same name makes GitHub return 422, so a same-day re-run could not
+        refresh the daily CSV. upload_files must delete the existing asset first."""
+        file_path = tmp_path / "test_file.txt"
+        file_path.write_text("Test content")
+        release = {
+            "id": 1,
+            "name": "Test Release",
+            "upload_url": self.mock_release["upload_url"],
+            "assets_url": f"https://api.github.com/repos/{self.repo}/releases/1/assets",
+        }
+        requests_mock.get(release["assets_url"], json=[{"id": 9, "name": "test_file.txt", "url": "https://api.github.com/repos/test_owner/test_repo/releases/assets/9"}], status_code=200)
+        delete = requests_mock.delete("https://api.github.com/repos/test_owner/test_repo/releases/assets/9", status_code=204)
+        upload = requests_mock.post(self.mock_release["upload_url"].split("{")[0] + "?name=test_file.txt", status_code=201)
+
+        self.github_release.upload_files(release, [str(file_path)])
+
+        assert delete.called, "the existing asset must be deleted before re-upload"
+        assert upload.called
     
     def test_release_exists(self, requests_mock):
         """Test checking if a release exists."""

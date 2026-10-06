@@ -65,13 +65,35 @@ class GitHubRelease:
             logger.error(f"GitHub API error: {e}")
             raise
 
+    def _delete_asset_named(self, release, name):
+        """Delete an existing asset with this name so it can be re-uploaded.
+
+        The upload endpoint returns 422 when an asset of the same name already exists, so a
+        same-day re-run of the daily job could not refresh its CSV. Deleting first makes the
+        upload idempotent (the weekly path already uses `gh release upload --clobber`).
+        """
+        assets_url = release.get("assets_url")
+        if not assets_url and release.get("id"):
+            assets_url = f"{GITHUB_API_URL}/repos/{self.repo}/releases/{release['id']}/assets"
+        if not assets_url:
+            return
+        resp = requests.get(assets_url, headers=self.headers)
+        if resp.status_code != 200:
+            return
+        for asset in resp.json():
+            if asset.get("name") == name:
+                delete = requests.delete(asset["url"], headers=self.headers)
+                delete.raise_for_status()
+                logger.info(f"Deleted existing asset {name} (id {asset.get('id')}) to re-upload")
+
     def upload_files(self, release, files):
         for file in files:
+            name = os.path.basename(file)
             try:
-                import os as _os
+                self._delete_asset_named(release, name)
 
                 with open(file, 'rb') as f:
-                    upload_url = release['upload_url'].split('{')[0] + f"?name={_os.path.basename(file)}"
+                    upload_url = release['upload_url'].split('{')[0] + f"?name={name}"
                     upload_headers = self.headers.copy()
                     upload_headers["Content-Type"] = "application/octet-stream"
 
