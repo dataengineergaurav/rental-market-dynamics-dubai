@@ -1,11 +1,10 @@
 """Gold index builders.
 
 `build_area_median_index` is a PENDING EXTRACTION, not the source of truth. The
-committed `gold_area_median` view in `build_weekly_duckdb.py:116-130` already
+committed `gold_area_median` view in `gold_layer.py` already
 applies all three exclusions below, correctly, and ships. This module is a tested
 reimplementation of a rule that already works, and nothing in production calls
-it — wiring it in is a separate change, held back because
-`build_weekly_duckdb.py` carries unrelated uncommitted work. Do not describe the
+it — wiring it in is a separate change. Do not describe the
 module and the view as "must not drift": they ALREADY differ on sort (this
 module sorts by `median_rent`, the view is `ORDER BY n DESC`), and on n's dtype
 (DuckDB `count(*)` is BIGINT, so the cast below has no live divergence either).
@@ -16,7 +15,7 @@ Where each exclusion genuinely comes from:
   plan:46 writes `prop_sub_type NOT IN ('Hotel','Labor Camps','Virtual Unit')`,
   but Virtual Unit is a value of the property_TYPE column and never of the
   sub_type column (356 vs 0 rows pooled 20260913-17), so the plan's filter
-  silently excludes nothing. build_weekly_duckdb.py:144 already had this right.
+  silently excludes nothing. the shipped `gold_layer.py` already had this right.
 - The count > 10 bulk rule is BULK_GROUP_MAX, below.
 
 plan:46 also specifies `actual_area >= 200`, which neither this module nor the

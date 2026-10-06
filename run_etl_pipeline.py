@@ -70,9 +70,8 @@ def _write_run_status(output_dir: Path, *, outcome: str, data_date: str, from_da
 
     The daily job stays fail-open (ADR-03) — `outcome="no_data"` is still a
     success — but it is now an explicit, greppable record instead of a silent
-    empty run. Enforcement for a stalled feed lives at the aggregation boundary
-    (WEEKLY_FRESHNESS_GATE in lib/config.py), where a missing day stops being a
-    quiet day and becomes a defect in the published week.
+    empty run. A stalled feed is caught downstream when the layers ingest cannot
+    reach the expected data date (MAX_REGISTRATION_LAG_DAYS).
     """
     payload = {
         "run_utc": datetime.now(timezone.utc).isoformat(),
@@ -329,7 +328,7 @@ def main():
         if os.getenv("GH_TOKEN"):
             # Bronze (raw) layer: the untransformed daily CSV is the published bronze artifact,
             # with the run status riding along so every release is self-describing. Parquet/report
-            # stay local — Silver/Gold are built weekly (see lib/analysis).
+            # stay local — the Silver/Gold layers are ingested daily from this CSV (lib/analysis).
             publish_artifacts_to_github(
                 [str(csv_filename), str(output_dir / "etl_status.json")], data_date=date_str
             )

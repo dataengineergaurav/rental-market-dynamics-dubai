@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Daily cumulative combined layers store.** Silver and Gold now live in ONE cumulative DuckDB
+  (`rents_layers.duckdb`, tag `release-layers-latest`) updated daily by upserting the day's
+  contracts on a `contract_id` primary key; the Gold views resolve in the same file with no
+  `ATTACH`. This replaces the weekly two-file build, its cross-file dedup code and its freshness
+  gate, so the time-series marts span all accumulated history instead of a single week. See
+  [ADR-10](docs/adr/0010-cumulative-combined-layers-duckdb.md) (supersedes ADR-07 and ADR-08).
+- `make layers` / `make layers-publish` replace `make weekly` / `weekly-publish`;
+  `.github/workflows/daily_layers.yml` replaces `weekly.yml`; `WEEKLY_FRESHNESS_GATE` is removed
+  (ingest keeps a one-day stall check instead).
 - **No-data release markers.** Every daily run now publishes `etl_status.json` to its
   `release-YYYY-MM-DD`, including quiet days that produce no CSV. A missing release now means the
   job never ran; a release without a CSV means no data — previously the two were indistinguishable.

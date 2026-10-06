@@ -1,0 +1,87 @@
+name: Daily — Ingest layers (cumulative Silver+Gold DuckDB)
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # daily 07:00 UTC — after the 05:30 bronze cron
+  workflow_dispatch:
+    inputs:
+      data_date:
+        description: 'Data date YYYY-MM-DD (default: yesterday)'
+        required: false
+        type: string
+
+jobs:
+  layers:
+    runs-on: ubuntu-latest
+    env:
+      ACTIONS_RUNNER_DEBUG: true
+      ACTIONS_STEP_DEBUG: true
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install deps
+        run: pip install -q -r requirements.txt && pip install -q lib/ && pip install -q duckdb pyarrow
+
+      - name: Refresh previous layers DuckDB (stable tag)
+        run: |
+          mkdir -p output
+          # The store is cumulative: pull yesterday's file and upsert today's contracts into it.
+          gh release download release-layers-latest \
+            --repo dataengineergaurav/rental-market-dynamics-dubai \
+            --pattern "rents_layers.duckdb" --dir output --clobber \
+            || echo "no previous layers artifact (cold start)"
+          ls -lh output/rents_layers.duckdb || true
+
+      - name: Download today's bronze CSV
+        run: |
+          DATE="${{ inputs.data_date }}"
+          if [ -z "$DATE" ]; then DATE=$(date -u -d "yesterday" +%Y-%m-%d); fi
+          echo "DATA_DATE=$DATE" >> $GITHUB_ENV
+          gh release download "release-$DATE" \
+            --repo dataengineergaurav/rental-market-dynamics-dubai \
+            --pattern "rent_contracts_*.csv" --dir output --clobber \
+            || echo "no CSV for release-$DATE (quiet day)"
+          ls -lh output/rent_contracts_*.csv || true
+
+      - name: Ingest into the cumulative layers DuckDB
+        run: |
+          CSV=$(ls -t output/rent_contracts_*.csv 2>/dev/null | head -1)
+          if [ -z "$CSV" ]; then echo "No CSV to ingest (quiet day) — nothing to do"; exit 0; fi
+          echo "Ingesting $CSV"
+          uv run python -m lib.analysis.build_layers_duckdb --db output/rents_layers.duckdb --csv "$CSV"
+          uv run python - << 'PY'
+          import duckdb
+          c = duckdb.connect("output/rents_layers.duckdb", read_only=True)
+          print("_meta:", c.execute("SELECT * FROM _meta").fetchall())
+          print("FctContract:", c.execute("SELECT count(*) FROM FctContract").fetchone())
+          # every view must resolve on a plain connection — no attach, no silver alias
+          print("gold_area_median:", c.execute("SELECT * FROM gold_area_median LIMIT 3").fetchall())
+          print("AggMonthlyRegistrations:", c.execute("SELECT * FROM AggMonthlyRegistrations").fetchall())
+          c.close()
+          PY
+
+      - name: Publish layers to Releases
+        if: hashFiles('output/rents_layers.duckdb') != ''
+        run: |
+          DATA_THROUGH=$(uv run python - << 'PY'
+          import duckdb
+          c = duckdb.connect("output/rents_layers.duckdb", read_only=True)
+          print(c.execute("SELECT data_through FROM _meta").fetchone()[0])
+          c.close()
+          PY
+          )
+          uv run python -m lib.workspace.publish_layers \
+            --artifact output/rents_layers.duckdb --data-through "$DATA_THROUGH"
+
+      - name: Run tests
+        run: uv run pytest -q
