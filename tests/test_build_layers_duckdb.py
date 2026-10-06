@@ -166,3 +166,22 @@ def test_empty_placeholder_is_not_ingested(tmp_path: Path, db_path: str):
 
     with pytest.raises(FileNotFoundError):
         ingest_layers(db_path=db_path, csv_paths=[placeholder])
+
+
+def test_meta_star_select_is_fetchable(tmp_path: Path, db_path: str):
+    """`SELECT * FROM _meta` must materialize cleanly.
+
+    `built_at` used to be DuckDB `now()` (TIMESTAMPTZ), which needs `pytz` to convert to a Python
+    value — a dependency this project does not declare. A naive TIMESTAMP avoids that; this guards
+    the regression a workflow smoke-check (`SELECT * FROM _meta`) caught on CI.
+    """
+    csv1 = tmp_path / "rent_contracts_20260914.csv"
+    _write_csv(csv1, [_row(1, "2026-09-14T00:00:00", "C1")])
+    ingest_layers(db_path=db_path, csv_paths=[csv1])
+
+    con = duckdb.connect(db_path, read_only=True)
+    try:
+        row = con.execute("SELECT * FROM _meta").fetchone()
+    finally:
+        con.close()
+    assert row is not None
