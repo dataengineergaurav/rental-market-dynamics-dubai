@@ -21,13 +21,14 @@ intelligence** — agents and BI dashboards asking *trend* questions ("Marina re
 
 ## Decision
 
-Publish **one cumulative DuckDB**, updated **daily**, published to the stable tag
-`release-layers-latest` (asset clobbered each run).
+Publish **one cumulative DuckDB**, updated **daily**, into the **day's release**
+(`release-YYYY-MM-DD`) — the same release the bronze CSV goes to, so there is one release per day,
+not a separate layers tag.
 
 | Layer | Artifact | Tag | Contents |
 |-------|----------|-----|----------|
 | Bronze | `rent_contracts_YYYYMMDD.csv` | `release-YYYY-MM-DD` | raw daily extract (unchanged) |
-| Layers | `rents_layers.duckdb` | `release-layers-latest` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` **and** the seven Gold views, in one file |
+| Layers | `rents_layers.duckdb` | `release-YYYY-MM-DD` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` **and** the seven Gold views, in one file |
 
 - **Cumulative, not windowed.** `build_layers_duckdb.ingest_layers` `INSERT OR REPLACE`s the day's
   contracts into `FctContract` and rebuilds the dimensions and views. The store grows; it is never
@@ -46,6 +47,9 @@ Publish **one cumulative DuckDB**, updated **daily**, published to the stable ta
   (1), i.e. a stall fails, a quiet day does not.
 - **Seeded empty, accumulates forward.** The first run creates the file from that day's CSV;
   `ingest_layers` accepts repeated `--csv`, so a backfill is available without new code.
+- **One release per data date.** Each `release-YYYY-MM-DD` carries the raw CSV, `etl_status.json`
+  and a full snapshot of the cumulative DuckDB. The prior store is recovered by pulling the most
+  recent earlier release that carries a `rents_layers.duckdb`.
 
 ## Rationale
 
@@ -76,7 +80,7 @@ Publish **one cumulative DuckDB**, updated **daily**, published to the stable ta
   `build_layers_duckdb._prepare_increment`. `lib/analysis/layers.connect_gold` becomes
   `connect_layers` (a plain connect — no attach).
 - `WEEKLY_FRESHNESS_GATE` is removed from `lib/config.py`; `publish_weekly_layers` becomes
-  `publish_layers` (one artifact → one stable tag).
+  `publish_layers` (one artifact → the day's `release-<data_through>` tag).
 - `.github/workflows/weekly.yml` becomes `daily_layers.yml`; `make weekly`/`weekly-publish` become
   `make layers`/`layers-publish`.
 - `_meta` is now one row describing the current store: `built_at`, `data_from`, `data_through`,
@@ -96,8 +100,8 @@ Publish **one cumulative DuckDB**, updated **daily**, published to the stable ta
   connect; **re-ingesting a day adds no rows**; a second day grows the fact without double-counting
   the overlap; `AggMonthlyRegistrations` spans the ingested months; a stale increment raises; a
   placeholder is not ingested.
-- `tests/test_publish_layers.py` — one artifact → `release-layers-latest`; missing artifact fails
-  before any upload.
+- `tests/test_publish_layers.py` — the tag is derived as `release-<data_through>`; missing artifact
+  fails before any upload.
 - `tests/test_metro_volume.py` — combined file, `_meta.data_through`, no attach.
 - End-to-end CLI: ingest day 1 → 2 contracts; day 2 (overlap) → 3; re-ingest day 2 → 3; monthly view
   returns 2026-09 and 2026-10.

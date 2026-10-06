@@ -17,7 +17,7 @@ help:
 	@echo "  notebook - Execute the Jupyter Notebook"
 	@echo "  test     - Run tests"
 	@echo "  layers   - Ingest today's CSV into the cumulative layers DuckDB"
-	@echo "  layers-publish - Publish the layers DuckDB to release-layers-latest"
+	@echo "  layers-publish - Publish the layers DuckDB into the day's release"
 	@echo "  clean    - Clean build artifacts and temporary files"
 
 # Clean: Remove build artifacts, temporary files, and caches
@@ -55,8 +55,9 @@ layers:
 	uv run python -m lib.analysis.build_layers_duckdb --db output/rents_layers.duckdb --csv "$$CSV"
 
 layers-publish:
-	@echo "Publishing the combined layers DuckDB to release-layers-latest..."
-	uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb
+	@echo "Publishing the combined layers DuckDB into the day's release..."
+	@DATA_THROUGH=$$(uv run python -c "import duckdb; print(duckdb.connect('output/rents_layers.duckdb', read_only=True).execute('SELECT data_through FROM _meta').fetchone()[0])"); \
+	uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb --data-through "$$DATA_THROUGH"
 
 # Scrapy rents (paginated, slow ~10s/page) — must run inside rents_scraper/
 scrapy-rents:
