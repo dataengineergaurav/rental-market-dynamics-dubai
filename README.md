@@ -12,19 +12,21 @@ Sales, title deeds, and short-term stay data are out of scope. Analysis favors *
 | Cadence | Output |
 |---------|--------|
 | **Daily** | Incremental extract → transform/enrich → Bronze release (raw CSV) |
-| **Weekly** | Pool recent daily CSVs into two DuckDB layer artifacts: Silver (normalized dim/fact tables) and Gold (analytics views) |
+| **Daily** | Ingest the day's contracts into one cumulative DuckDB with Silver (normalized dim/fact tables) and Gold (analytics views) in a single file |
 
-The pipeline treats data as a **bronze → silver → gold** flow under `output/`, and each layer is
-published as its own GitHub Release:
+The pipeline treats data as a **bronze → silver → gold** flow. Bronze is one file per day; Silver and
+Gold live together in a single **cumulative** store that grows every day:
 
 | Layer | Artifact | Tag | Contents |
 |-------|----------|-----|----------|
 | **Bronze** | `rent_contracts_YYYYMMDD.csv` | `release-YYYY-MM-DD` | raw daily extract, as returned by the endpoint |
-| **Silver** | `silver_YYYYWww.duckdb` | `release-silver-YYYYWww` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` |
-| **Gold** | `gold_YYYYWww.duckdb` | `release-gold-YYYYWww` | views `gold_area_median`, `gold_standard_lease`, `gold_top_metros_daily`, `AggAreaRentStats`, `AggMetroPremium`, `AggMonthlyRegistrations`, `AggProjectRentStats` |
+| **Silver** | `rents_layers.duckdb` | `release-layers-latest` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` |
+| **Gold** | `rents_layers.duckdb` | `release-layers-latest` | views `gold_area_median`, `gold_standard_lease`, `gold_top_metros_daily`, `AggAreaRentStats`, `AggMetroPremium`, `AggMonthlyRegistrations`, `AggProjectRentStats` |
 
-Gold views read the Silver tables, so a Gold DuckDB resolves only while Silver is attached under the
-`silver` alias — `lib.analysis.layers.connect_gold` does that for you.
+The Silver tables and the Gold views are in the **same** DuckDB file, so a plain
+`duckdb.connect("rents_layers.duckdb")` resolves every view — no `ATTACH`, no alias. The store is
+cumulative (seeded empty, grown daily), so the time-series marts (`AggMonthlyRegistrations`, and the
+per-area medians) span all history rather than a single week.
 
 ## Data guarantees
 
@@ -34,16 +36,16 @@ Gold views read the Silver tables, so a Gold DuckDB resolves only while Silver i
   a *quiet day* and a missing release is a run that never happened — the two are distinguishable from
   the releases list alone. A *missing* file after a successful download is not treated as "no data" —
   it proceeds and fails.
-- **Cross-file dedup.** The extract uses a 2-day window, so a registration can appear in two
-  consecutive daily files. The weekly build drops rows repeating a `row_hash` first seen in an
-  earlier file, before enrichment, so Gold medians and counts are not double-counted.
-- **Freshness gate.** The weekly build refuses to publish a DuckDB when a day in the requested
-  window has no usable CSV, or when the newest registration trails the window end — it raises
-  instead of shipping a stale artifact. Thresholds: `WEEKLY_FRESHNESS_GATE` in `lib/config.py`.
+- **Idempotent by primary key.** The extract uses a 2-day window, so a registration can appear in two
+  consecutive daily files. `FctContract` is keyed on `contract_id`, so ingesting a day again (a
+  re-run, or the next day's overlapping window) **replaces** the row instead of duplicating it — no
+  cross-file dedup code, just the DB constraint.
+- **A stalled feed fails.** Ingest keeps one trust check: the newest registration may trail the data
+  date its filename claims by at most `MAX_REGISTRATION_LAG_DAYS` (1). A quiet day is fine; a feed
+  that stops advancing is not. The store's freshness is readable from `_meta.data_through`.
 
-Every weekly build records what it was made of — `pooled_rows`, `deduped_rows`,
-`row_hash_duplicates_removed`, `daily_files`/`expected_daily_files`/`missing_daily_files`, and
-`data_through` — in the `_meta` view.
+The `_meta` table is one row describing the current store — `built_at`, `data_from`, `data_through`,
+`total_contracts`, `last_ingested_window`.
 
 ## Architecture
 
@@ -57,25 +59,26 @@ EJARI_URL (paginated)
    Bronze: rent_contracts_YYYYMMDD.csv ──► daily release (empty window → NO_NEW_DATA, exit 0)
         │
         ▼
-   Weekly pool ──► freshness gate ──► cross-file dedup ──► enrich (Polars)
-        │
-        ├──► Silver: silver_YYYYWww.duckdb   (DimArea, DimPropertyType, DimMetro, FctContract)
+   Ingest ──► enrich (Polars) ──► INSERT OR REPLACE (key: contract_id)
         │
         ▼
-   Gold: gold_YYYYWww.duckdb   (views over the attached Silver tables)
+   rents_layers.duckdb   (cumulative, one file)
+        ├── Silver tables: DimArea, DimPropertyType, DimMetro, FctContract, _meta
+        └── Gold views:    gold_*, Agg*   (resolve in-file, no ATTACH)
 ```
 
-Orchestration is Make-driven locally and via GitHub Actions (daily ETL, weekly Silver/Gold build,
-push builds). See [ADR-07](docs/adr/0007-weekly-cross-file-dedup-and-freshness-gate.md) for why
-dedup is cross-file and the gate sits at the weekly boundary, and
-[ADR-08](docs/adr/0008-layered-bronze-silver-gold-releases.md) for the layer release contract.
+Orchestration is Make-driven locally and via GitHub Actions (daily ETL, daily layers ingest, push
+builds). See [ADR-10](docs/adr/0010-cumulative-combined-layers-duckdb.md) for why the layers are
+cumulative, keyed and combined in one file (it supersedes
+[ADR-07](docs/adr/0007-weekly-cross-file-dedup-and-freshness-gate.md) and
+[ADR-08](docs/adr/0008-layered-bronze-silver-gold-releases.md)).
 
 ## Stack
 
 - **Python** 3.9+ (CI uses 3.12)
 - **Polars** / **PyArrow** for transform
 - **Pydantic** v2 for the Silver contract
-- **DuckDB** for weekly analytics
+- **DuckDB** for the cumulative layers store
 - **Scrapy** for Ejari extraction
 - **uv** (or pip) for dependencies
 
@@ -97,38 +100,40 @@ Required environment variables:
 
 ```bash
 make all              # build → daily ETL → tests
-make weekly           # build the weekly Silver + Gold DuckDBs (previous complete ISO week)
+make layers           # ingest today's CSV into the cumulative layers DuckDB
+make layers-publish   # publish the layers DuckDB to release-layers-latest
 make test             # pytest
 make scrapy-rents     # Scrapy extract only
 ```
 
-Daily entry point: `run_etl_pipeline.py`. Weekly analytics: `python -m lib.analysis.build_weekly_duckdb`,
-which takes `--week 2026W37` or an explicit `--from YYYYMMDD --to YYYYMMDD` and builds both layers
-(`--layer silver` or `--layer gold` builds one). It raises rather than build a week its daily files
-do not cover.
+Daily entry point: `run_etl_pipeline.py`. Layers ingest:
+`python -m lib.analysis.build_layers_duckdb --csv output/rent_contracts_YYYYMMDD.csv` (repeat `--csv`
+to backfill several days at once). Publishing:
+`python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb`.
 
 ## Layout
 
 ```
 lib/              Extract, transform, enrichment, analytics, release helpers
 rents_scraper/    Scrapy spider for Ejari rents
-output/           Daily CSVs, Parquet, weekly DuckDB artifacts
+output/           Daily CSVs, Parquet, the cumulative layers DuckDB
 tests/            Pipeline and data-quality gates
 docs/             Implementation plan, roadmap, library usage
-.github/          Daily / weekly / push workflows
+.github/          Daily ETL / daily layers / push workflows
 ```
 
 ## Data & releases
 
-Each layer is published as its own release: Bronze daily CSVs (`release-YYYY-MM-DD`), and weekly
-Silver/Gold DuckDBs (`release-silver-YYYYWww`, `release-gold-YYYYWww`) — see
+Bronze is one release per day (`release-YYYY-MM-DD`). The combined Silver+Gold store is published to
+the stable tag `release-layers-latest` (its asset is clobbered each daily run) — see
 [GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
+Exact historical layer files are reproducible from the immutable dated bronze releases.
 
 ## Further reading
 
 - [Library usage guide](docs/LIBRARY_USAGE_GUIDE.md) — `MarketAnalytics` / enrichment APIs
 - [ADR-06: pydantic v2 Silver contract](docs/adr/0006-pydantic-silver-contract.md)
-- [ADR-07: weekly cross-file dedup and freshness gate](docs/adr/0007-weekly-cross-file-dedup-and-freshness-gate.md)
+- [ADR-10: daily cumulative combined layers](docs/adr/0010-cumulative-combined-layers-duckdb.md)
 - [Silver contract design](docs/superpowers/specs/2026-09-27-silver-contract-design.md) — field measurements and the market-health gate
 
 ## Contributing

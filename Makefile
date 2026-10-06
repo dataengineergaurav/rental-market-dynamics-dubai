@@ -16,6 +16,8 @@ help:
 	@echo "  scrapy-rents - Scrapy rents Ejari (slow)"
 	@echo "  notebook - Execute the Jupyter Notebook"
 	@echo "  test     - Run tests"
+	@echo "  layers   - Ingest today's CSV into the cumulative layers DuckDB"
+	@echo "  layers-publish - Publish the layers DuckDB to release-layers-latest"
 	@echo "  clean    - Clean build artifacts and temporary files"
 
 # Clean: Remove build artifacts, temporary files, and caches
@@ -44,17 +46,17 @@ etl:
 	@echo "Running Ejari rents ETL process..."
 	python run_etl_pipeline.py
 
-# Weekly: 7-day Mon-Sun pooled. Builds both layer DuckDBs (Silver tables + Gold views)
-weekly:
-	@echo "Building weekly layers (previous complete ISO week)..."
-	@WEEK=$$(python3 -c "from datetime import date,timedelta; d=date.today()-timedelta(days=7); y,w,_=d.isocalendar(); print(f'{y}W{w:02d}')"); \
-	echo "Week $$WEEK"; \
-	uv run python -m lib.analysis.build_weekly_duckdb --week $$WEEK
+# Layers: ingest today's daily CSV into the cumulative combined DuckDB (Silver tables + Gold views)
+layers:
+	@echo "Ingesting today's contracts into the cumulative layers DuckDB..."
+	@CSV=$$(ls -t output/rent_contracts_*.csv 2>/dev/null | head -1); \
+	test -n "$$CSV" || (echo "No output/rent_contracts_*.csv to ingest; run 'make etl' first" && exit 1); \
+	echo "Ingesting $$CSV"; \
+	uv run python -m lib.analysis.build_layers_duckdb --db output/rents_layers.duckdb --csv "$$CSV"
 
-weekly-publish: weekly
-	@echo "Publishing weekly Silver and Gold DuckDBs to GitHub Releases..."
-	@test -n "$(WEEK)" || (echo "Usage: make weekly-publish WEEK=2026W37" && exit 1)
-	uv run python -m lib.workspace.publish_layers --week $(WEEK) --silver output/silver_$(WEEK).duckdb --gold output/gold_$(WEEK).duckdb
+layers-publish:
+	@echo "Publishing the combined layers DuckDB to release-layers-latest..."
+	uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb
 
 # Scrapy rents (paginated, slow ~10s/page) — must run inside rents_scraper/
 scrapy-rents:
@@ -67,4 +69,4 @@ test:
 	pytest .
 
 # Declare phony targets to avoid conflicts with files
-.PHONY: all help clean build etl test scrapy-rents
+.PHONY: all help clean build etl test scrapy-rents layers layers-publish

@@ -1,13 +1,11 @@
-"""Publish the weekly Silver and Gold layer DuckDBs to their own release tags.
+"""Publish the combined layers DuckDB to its own stable release tag.
 
-This is the single publishing path for both the daily bronze CSV and the weekly layers — it uses
-the same `GitHubRelease` client (`lib.workspace.github_client`), which now clobbers existing assets.
-The weekly workflow and `make weekly-publish` call the CLI below, so neither has to reimplement the
-tag/asset logic with `gh` (which had already drifted once: it tagged the wrong week).
+This is the single publishing path for the layers store — it uses the same `GitHubRelease`
+client (`lib.workspace.github_client`) as the daily bronze publish, which clobbers existing
+assets so the tag always carries the newest file.
 
 Usage:
-  uv run python -m lib.workspace.publish_layers --week 2026W39 \
-      --silver output/silver_2026W39.duckdb --gold output/gold_2026W39.duckdb
+  uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb
 """
 from __future__ import annotations
 
@@ -20,52 +18,52 @@ from lib.workspace.github_client import GitHubRelease
 logger = logging.getLogger(__name__)
 
 DEFAULT_REPO = "dataengineergaurav/rental-market-dynamics-dubai"
+DEFAULT_TAG = "release-layers-latest"
 
 
-def publish_weekly_layers(
-    silver_path: str | Path,
-    gold_path: str | Path,
-    week: str,
+def publish_layers(
+    artifact_path: str | Path,
     repo: str = DEFAULT_REPO,
-) -> list[str]:
-    """Publish each layer to `release-<layer>-<week>`. Returns the tags published.
+    tag: str = DEFAULT_TAG,
+    data_through: str | None = None,
+) -> str:
+    """Publish the combined DuckDB to `tag` (default: the stable `release-layers-latest`).
 
-    A missing artifact fails loudly before any upload, so a tag is never created that does not
-    match its asset.
+    A missing artifact fails loudly before any upload, so the tag is never created without its
+    asset. The GitHubRelease client reuses an existing release for the tag and deletes the
+    same-named asset first, so a same-day re-run refreshes idempotently. Returns the tag.
     """
-    gh = GitHubRelease(repo)
-    layers = [("silver", Path(silver_path)), ("gold", Path(gold_path))]
-    missing = [f"{name} artifact not found: {path}" for name, path in layers if not path.exists()]
-    if missing:
-        # Validate everything BEFORE the first upload, so a missing Gold cannot leave a Silver
-        # release published with no counterpart.
-        raise FileNotFoundError("; ".join(missing))
+    artifact = Path(artifact_path)
+    if not artifact.exists():
+        raise FileNotFoundError(f"layers artifact not found: {artifact}")
 
-    tags: list[str] = []
-    for layer, artifact in layers:
-        tag = f"release-{layer}-{week}"
-        gh.publish(
-            files=[str(artifact)],
-            tag_name=tag,
-            name=f"{layer} {week}",
-            body=f"Weekly {layer} layer {week} — {artifact.name}",
-        )
-        tags.append(tag)
-    return tags
+    body = "Combined Silver+Gold DuckDB (cumulative)."
+    if data_through:
+        body += f" Data through {data_through}."
+    GitHubRelease(repo).publish(
+        files=[str(artifact)],
+        tag_name=tag,
+        name="layers latest" + (f" (data through {data_through})" if data_through else ""),
+        body=body,
+    )
+    return tag
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Publish the weekly Silver and Gold DuckDBs")
-    parser.add_argument("--week", required=True, help="ISO week like 2026W39")
-    parser.add_argument("--silver", required=True, help="path to silver_YYYYWww.duckdb")
-    parser.add_argument("--gold", required=True, help="path to gold_YYYYWww.duckdb")
+    parser = argparse.ArgumentParser(description="Publish the combined layers DuckDB")
+    parser.add_argument("--artifact", required=True, help="path to the layers DuckDB")
+    parser.add_argument("--tag", default=DEFAULT_TAG, help=f"release tag (default {DEFAULT_TAG})")
+    parser.add_argument("--data-through", help="max registration date, for the release notes")
     parser.add_argument("--repo", default=DEFAULT_REPO, help="owner/repo to publish to")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    tags = publish_weekly_layers(
-        silver_path=args.silver, gold_path=args.gold, week=args.week, repo=args.repo
+    tag = publish_layers(
+        artifact_path=args.artifact,
+        repo=args.repo,
+        tag=args.tag,
+        data_through=args.data_through,
     )
-    logger.info(f"Published {', '.join(tags)}")
+    logger.info(f"Published {tag}")
 
 
 if __name__ == "__main__":

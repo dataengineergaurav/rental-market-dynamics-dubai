@@ -1,8 +1,8 @@
 """Gold layer — the analytics view DDL built on the Silver tables.
 
-Every view selects from the attached Silver database through the fixed catalog alias `silver`
-(created by `build_gold_duckdb`; re-established by `layers.connect_gold` when reading). That is why
-a Gold DuckDB only works once Silver is attached: the views are definitions, not copies.
+Every view selects from the Silver tables in the SAME DuckDB file (no catalog alias, no
+`ATTACH`): the combined layers store carries the tables and the views together, so the views
+resolve on a plain `duckdb.connect(path)`.
 
 Contracts:
   - All rent-per-sqft figures read Silver's FctContract.price_per_sqft — never recomputed here.
@@ -19,9 +19,9 @@ SELECT a.area_name_en, count(*) AS n,
        avg(f.annual_amount) AS mean_rent,
        min(f.annual_amount) AS min_rent,
        max(f.annual_amount) AS max_rent
-FROM silver.main.FctContract f
-JOIN silver.main.DimArea a USING (area_key)
-JOIN silver.main.DimPropertyType pt USING (property_type_key)
+FROM FctContract f
+JOIN DimArea a USING (area_name_en)
+JOIN DimPropertyType pt USING (ejari_property_type_en, ejari_property_sub_type_en, property_usage_en)
 WHERE pt.ejari_property_sub_type_en NOT IN ('Hotel','Labor Camps')
   AND pt.ejari_property_type_en != 'Virtual Unit'
   AND f.is_bulk_registration = false
@@ -36,8 +36,8 @@ CREATE OR REPLACE VIEW gold_standard_lease AS
 SELECT count(*) AS n,
        median(f.annual_amount) AS median_rent,
        avg(f.annual_amount) AS mean_rent
-FROM silver.main.FctContract f
-JOIN silver.main.DimPropertyType pt USING (property_type_key)
+FROM FctContract f
+JOIN DimPropertyType pt USING (ejari_property_type_en, ejari_property_sub_type_en, property_usage_en)
 WHERE pt.ejari_property_sub_type_en = 'Flat'
   AND f.contract_duration_days >= 180 AND f.contract_duration_days <= 365
   AND pt.ejari_property_type_en != 'Virtual Unit'
@@ -54,8 +54,8 @@ SELECT
         PARTITION BY DATE(f.contract_registration_date)
         ORDER BY COUNT(f.rn) DESC
     ) AS contract_rank
-FROM silver.main.FctContract f
-JOIN silver.main.DimMetro m USING (metro_key)
+FROM FctContract f
+JOIN DimMetro m USING (nearest_metro_en)
 GROUP BY m.nearest_metro_en, contract_reg_date
 QUALIFY contract_rank <= 3
 ORDER BY contract_reg_date DESC, contract_rank ASC
@@ -71,8 +71,8 @@ SELECT a.area_name_en,
        quantile_cont(f.annual_amount, 0.90) AS p90_rent,
        avg(f.price_per_sqft) AS avg_price_per_sqft,
        median(f.price_per_sqft) AS median_price_per_sqft
-FROM silver.main.FctContract f
-JOIN silver.main.DimArea a USING (area_key)
+FROM FctContract f
+JOIN DimArea a USING (area_name_en)
 GROUP BY a.area_name_en
 """
 
@@ -81,27 +81,28 @@ GROUP BY a.area_name_en
 # judge the comparison.
 _AGG_METRO_PREMIUM = """
 CREATE OR REPLACE VIEW AggMetroPremium AS
-WITH city AS (SELECT median(annual_amount) AS city_median_rent FROM silver.main.FctContract)
+WITH city AS (SELECT median(annual_amount) AS city_median_rent FROM FctContract)
 SELECT m.nearest_metro_en AS nearest_metro_en,
        count(*) AS n,
        median(f.annual_amount) AS median_rent,
        city.city_median_rent,
        round(100.0 * (median(f.annual_amount) - city.city_median_rent) / city.city_median_rent, 2)
            AS premium_vs_city_pct
-FROM silver.main.FctContract f
-JOIN silver.main.DimMetro m USING (metro_key)
+FROM FctContract f
+JOIN DimMetro m USING (nearest_metro_en)
 CROSS JOIN city
 GROUP BY m.nearest_metro_en, city.city_median_rent
 """
 
 # Monthly totals aggregate over the deduplicated contract grain (FctContract is one row per
-# registration), so multi-property blocks are not summed more than once.
+# registration), so multi-property blocks are not summed more than once. Over a cumulative store
+# this is the trend view: one row per month of history.
 _AGG_MONTHLY_REGISTRATIONS = """
 CREATE OR REPLACE VIEW AggMonthlyRegistrations AS
 SELECT strftime(date_trunc('month', f.contract_registration_date), '%Y-%m') AS month,
        count(*) AS n_contracts,
        sum(f.annual_amount) AS total_annual_value
-FROM silver.main.FctContract f
+FROM FctContract f
 GROUP BY month
 ORDER BY month
 """
@@ -111,8 +112,8 @@ CREATE OR REPLACE VIEW AggProjectRentStats AS
 SELECT f.project_name_en,
        count(*) AS n,
        median(f.annual_amount) AS median_rent,
-       avg(f.annual_amount) AS avg_rent
-FROM silver.main.FctContract f
+       avg(f.annual_amount) AS mean_rent
+FROM FctContract f
 WHERE f.project_name_en IS NOT NULL
 GROUP BY f.project_name_en
 """

@@ -1,11 +1,11 @@
 """
-Top metros by daily registration volume — query gold_top_metros_daily from a Gold DuckDB.
+Top metros by daily registration volume — query gold_top_metros_daily from the layers DuckDB.
 
-The Gold view reads the Silver tables, so the Silver DB is attached as `silver` for the query
-(see lib.analysis.layers). By default the sibling `silver_YYYYWww.duckdb` is used.
+The combined store holds Silver tables and Gold views in one file, so a plain connection
+resolves the view (see lib.analysis.layers).
 
 Usage:
-  uv run python -m lib.analysis.metro_volume --gold output/gold_2026W37.duckdb
+  uv run python -m lib.analysis.metro_volume --db output/rents_layers.duckdb
 """
 from __future__ import annotations
 
@@ -16,10 +16,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
 
-import duckdb
 from pydantic import BaseModel, Field, field_validator
 
-from lib.analysis.layers import connect_gold
+from lib.analysis.layers import connect_layers
 
 logger = logging.getLogger(__name__)
 
@@ -45,20 +44,14 @@ class TopMetroDailyRow(BaseModel):
 class TopMetroDailyResult(BaseModel):
     rows: List[TopMetroDailyRow]
     db_path: str
-    week: Optional[str] = None
+    data_through: Optional[date] = None
 
 
-def query_top_metros_daily(
-    gold_path: Path | str, silver_path: Path | str | None = None
-) -> TopMetroDailyResult:
-    """Read gold_top_metros_daily from a Gold DuckDB and validate with Pydantic.
+def query_top_metros_daily(db_path: Path | str) -> TopMetroDailyResult:
+    """Read gold_top_metros_daily from the layers DuckDB and validate with Pydantic."""
+    path = Path(db_path)
 
-    The Gold view reads the Silver tables, so `connect_gold` attaches the Silver DB (default:
-    the sibling `silver_YYYYWww.duckdb`) as `silver` before querying.
-    """
-    path = Path(gold_path)
-
-    con = connect_gold(path, silver_path=silver_path)
+    con = connect_layers(path)
     try:
         records = con.execute(
             """
@@ -68,9 +61,9 @@ def query_top_metros_daily(
             ORDER BY contract_reg_date DESC, contract_rank ASC
             """
         ).fetchall()
-        week = None
+        data_through = None
         try:
-            week = con.execute("SELECT week FROM silver.main._meta").fetchone()[0]
+            data_through = con.execute("SELECT data_through FROM _meta").fetchone()[0]
         except Exception:
             pass
     finally:
@@ -85,7 +78,7 @@ def query_top_metros_daily(
         )
         for r in records
     ]
-    return TopMetroDailyResult(rows=rows, db_path=str(path), week=week)
+    return TopMetroDailyResult(rows=rows, db_path=str(path), data_through=data_through)
 
 
 def export_csv(result: TopMetroDailyResult, output: Path | str) -> Path:
@@ -110,13 +103,9 @@ def export_csv(result: TopMetroDailyResult, output: Path | str) -> Path:
 def main():
     parser = argparse.ArgumentParser(description="Query top metros by registration day")
     parser.add_argument(
-        "--gold",
-        required=True,
-        help="Path to Gold DuckDB (e.g. output/gold_2026W37.duckdb)",
-    )
-    parser.add_argument(
-        "--silver",
-        help="Path to Silver DuckDB (default: sibling silver_YYYYWww.duckdb)",
+        "--db",
+        default="output/rents_layers.duckdb",
+        help="Path to the layers DuckDB (default output/rents_layers.duckdb)",
     )
     parser.add_argument(
         "--output",
@@ -125,16 +114,16 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
-    result = query_top_metros_daily(args.gold, silver_path=args.silver)
+    result = query_top_metros_daily(args.db)
     out = Path(args.output) if args.output else Path(
-        f"output/top_metros_daily_{Path(args.gold).stem.replace('gold_', '')}.csv"
+        f"output/top_metros_daily_{Path(args.db).stem}.csv"
     )
     export_csv(result, out)
     logger.info(
         "Wrote %s — %d rows%s",
         out,
         len(result.rows),
-        f" (week {result.week})" if result.week else "",
+        f" (data through {result.data_through})" if result.data_through else "",
     )
     for row in result.rows[:15]:
         print(
