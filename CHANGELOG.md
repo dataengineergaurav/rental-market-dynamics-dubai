@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Layered Bronze/Silver/Gold releases.** The weekly artifact is split into two DuckDBs:
+  `silver_YYYYWww.duckdb` (normalized `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`,
+  `_meta` tables) tagged `release-silver-YYYYWww`, and `gold_YYYYWww.duckdb` (seven analytics
+  views over the attached Silver tables) tagged `release-gold-YYYYWww`. The daily raw CSV remains
+  the bronze layer (`release-YYYY-MM-DD`). Gold views are defined against the `silver` catalog
+  alias, so consumers attach Silver first (`lib/analysis/layers.connect_gold`). See
+  [ADR-08](docs/adr/0008-layered-bronze-silver-gold-releases.md).
 - **Weekly cross-file dedup.** The weekly DuckDB build now drops rows repeating a Silver `row_hash`
   first seen in an earlier daily file, before enrichment, so the 2-day extract window no longer
   double-counts into the Gold medians and counts. Within-file repeats (bulk registrations) are

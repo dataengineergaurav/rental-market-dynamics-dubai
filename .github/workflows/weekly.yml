@@ -39,7 +39,7 @@ jobs:
           [[ "$WEEK" =~ ^[0-9]{4}W[0-9]{2}$ ]] || { echo "bad week: $WEEK (want YYYYWNn)"; exit 1; }
           echo "WEEK=$WEEK" >> $GITHUB_ENV
           # Monday of target ISO week — single source of truth in lib (same Jan-4 algorithm as week_to_dates)
-          MON=$(python3 -c "from lib.analysis.build_weekly_duckdb import week_to_dates; print(week_to_dates('$WEEK')[0])")
+          MON=$(python3 -c "from lib.analysis.weekly_pool import week_to_dates; print(week_to_dates('$WEEK')[0])")
           echo "MON=$MON" >> $GITHUB_ENV
           for i in 0 1 2 3 4 5 6; do
             tag="release-$(date -d "$MON +$i days" +%Y-%m-%d)"
@@ -49,7 +49,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-      - name: Build weekly DuckDB (Mon-Sun)
+      - name: Build weekly layers (Silver tables + Gold views)
         run: |
           WEEK="${{ inputs.week }}"
           if [ -z "$WEEK" ]; then WEEK=$(date -d "7 days ago" +%GW%V); fi
@@ -58,29 +58,40 @@ jobs:
           # prefer ISO week; fallback to explicit from/to of the same Mon-Sun week for partial weeks
           uv run python -m lib.analysis.build_weekly_duckdb --week "$WEEK" || \
             uv run python -m lib.analysis.build_weekly_duckdb --from $(date -d "$MON" +%Y%m%d) --to $(date -d "$MON +6 days" +%Y%m%d)
-          ls -lh output/*.duckdb
+          ls -lh output/silver_*.duckdb output/gold_*.duckdb
           uv run python - << 'PY'
-          import duckdb, os
-          f=f"output/rental_analytics_weekly_{os.environ['WEEK']}.duckdb"
-          # fallback if week label differed — pick newest
-          import pathlib
-          if not pathlib.Path(f).exists():
-              import glob
-              cand=sorted(glob.glob("output/rental_analytics_weekly_*.duckdb"))
-              f=cand[-1] if cand else f
-          con=duckdb.connect(f)
-          print(con.execute("SELECT * FROM _meta").fetchall())
-          print(con.execute("SELECT count(*) FROM fact_rental_contract").fetchall())
-          print(con.execute("SELECT area_name_en, n, median_rent FROM gold_area_median LIMIT 3").fetchall())
+          import duckdb, glob, os, pathlib
+          week = os.environ['WEEK']
+          silver = f"output/silver_{week}.duckdb"
+          gold = f"output/gold_{week}.duckdb"
+          # fallback if the week label differed — pick newest
+          if not pathlib.Path(silver).exists():
+              silver = sorted(glob.glob("output/silver_*.duckdb"))[-1]
+          if not pathlib.Path(gold).exists():
+              gold = sorted(glob.glob("output/gold_*.duckdb"))[-1]
+          c = duckdb.connect(silver, read_only=True)
+          print("_meta:", c.execute("SELECT * FROM _meta").fetchall())
+          print("FctContract:", c.execute("SELECT count(*) FROM FctContract").fetchone())
+          c.close()
+          c = duckdb.connect(gold, read_only=True)
+          c.execute(f"ATTACH '{silver}' AS silver (READ_ONLY)")
+          print("gold_area_median:", c.execute("SELECT area_name_en, n, median_rent FROM gold_area_median LIMIT 3").fetchall())
+          print("AggAreaRentStats rows:", c.execute("SELECT count(*) FROM AggAreaRentStats").fetchone())
+          c.close()
           PY
 
-      - name: Publish to weekly Release
+      - name: Publish Silver and Gold to Releases
         run: |
           WEEK=$(cat $GITHUB_ENV 2>/dev/null | grep WEEK= | cut -d= -f2)
           [ -n "$WEEK" ] || WEEK=$(date -d "7 days ago" +%GW%V)
-          FILE=$(ls -1 output/rental_analytics_weekly_*.duckdb | tail -1)
-          gh release view "release-week-$WEEK" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || gh release create "release-week-$WEEK" --repo dataengineergaurav/rental-market-dynamics-dubai --title "Weekly $WEEK" --notes "Weekly DuckDB $WEEK — 7d pooled enriched fact + gold views (fact_rental_contract, gold_area_median, gold_standard_lease)" --latest=false
-          gh release upload "release-week-$WEEK" "$FILE" --repo dataengineergaurav/rental-market-dynamics-dubai --clobber
+          for L in silver gold; do
+            FILE=$(ls -1 output/${L}_${WEEK}.duckdb 2>/dev/null | tail -1)
+            [ -n "$FILE" ] || FILE=$(ls -1 output/${L}_*.duckdb | tail -1)
+            TAG="release-${L}-${WEEK}"
+            gh release view "$TAG" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || \
+              gh release create "$TAG" --repo dataengineergaurav/rental-market-dynamics-dubai --title "${L} ${WEEK}" --notes "Weekly ${L} layer ${WEEK} — $(basename "$FILE")" --latest=false
+            gh release upload "$TAG" "$FILE" --repo dataengineergaurav/rental-market-dynamics-dubai --clobber
+          done
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 

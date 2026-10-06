@@ -1,8 +1,11 @@
 """
-Top metros by daily registration volume — query gold_top_metros_daily from a weekly DuckDB.
+Top metros by daily registration volume — query gold_top_metros_daily from a Gold DuckDB.
+
+The Gold view reads the Silver tables, so the Silver DB is attached as `silver` for the query
+(see lib.analysis.layers). By default the sibling `silver_YYYYWww.duckdb` is used.
 
 Usage:
-  uv run python -m lib.analysis.metro_volume --db output/rental_analytics_weekly_2026W37.duckdb
+  uv run python -m lib.analysis.metro_volume --gold output/gold_2026W37.duckdb
 """
 from __future__ import annotations
 
@@ -15,6 +18,8 @@ from typing import List, Optional
 
 import duckdb
 from pydantic import BaseModel, Field, field_validator
+
+from lib.analysis.layers import connect_gold
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +48,17 @@ class TopMetroDailyResult(BaseModel):
     week: Optional[str] = None
 
 
-def query_top_metros_daily(db_path: Path | str) -> TopMetroDailyResult:
-    """Read gold_top_metros_daily from a weekly analytics DuckDB and validate with Pydantic."""
-    path = Path(db_path)
-    if not path.exists():
-        raise FileNotFoundError(f"DuckDB not found: {path}")
+def query_top_metros_daily(
+    gold_path: Path | str, silver_path: Path | str | None = None
+) -> TopMetroDailyResult:
+    """Read gold_top_metros_daily from a Gold DuckDB and validate with Pydantic.
 
-    con = duckdb.connect(str(path), read_only=True)
+    The Gold view reads the Silver tables, so `connect_gold` attaches the Silver DB (default:
+    the sibling `silver_YYYYWww.duckdb`) as `silver` before querying.
+    """
+    path = Path(gold_path)
+
+    con = connect_gold(path, silver_path=silver_path)
     try:
         records = con.execute(
             """
@@ -61,7 +70,7 @@ def query_top_metros_daily(db_path: Path | str) -> TopMetroDailyResult:
         ).fetchall()
         week = None
         try:
-            week = con.execute("SELECT week FROM _meta").fetchone()[0]
+            week = con.execute("SELECT week FROM silver.main._meta").fetchone()[0]
         except Exception:
             pass
     finally:
@@ -101,9 +110,13 @@ def export_csv(result: TopMetroDailyResult, output: Path | str) -> Path:
 def main():
     parser = argparse.ArgumentParser(description="Query top metros by registration day")
     parser.add_argument(
-        "--db",
+        "--gold",
         required=True,
-        help="Path to weekly DuckDB (e.g. output/rental_analytics_weekly_2026W37.duckdb)",
+        help="Path to Gold DuckDB (e.g. output/gold_2026W37.duckdb)",
+    )
+    parser.add_argument(
+        "--silver",
+        help="Path to Silver DuckDB (default: sibling silver_YYYYWww.duckdb)",
     )
     parser.add_argument(
         "--output",
@@ -112,9 +125,9 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
-    result = query_top_metros_daily(args.db)
+    result = query_top_metros_daily(args.gold, silver_path=args.silver)
     out = Path(args.output) if args.output else Path(
-        f"output/top_metros_daily_{Path(args.db).stem.replace('rental_analytics_weekly_', '')}.csv"
+        f"output/top_metros_daily_{Path(args.gold).stem.replace('gold_', '')}.csv"
     )
     export_csv(result, out)
     logger.info(

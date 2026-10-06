@@ -310,7 +310,8 @@ def main():
             logger.warning(f"Analyze skipped: {e}")
 
         if os.getenv("GH_TOKEN"):
-            # publish CSV only (parquet not needed for incremental)
+            # Bronze (raw) layer: the untransformed daily CSV is the published bronze artifact.
+            # Parquet/report stay local — Silver/Gold are built weekly (see lib/analysis).
             publish_artifacts_to_github([str(csv_filename)])
         else:
             logger.info("Skipping GitHub publication (GH_TOKEN not set)")

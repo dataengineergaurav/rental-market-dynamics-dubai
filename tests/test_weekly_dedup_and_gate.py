@@ -15,9 +15,9 @@ import duckdb
 import polars as pl
 import pytest
 
+from lib.analysis.build_silver_duckdb import build_silver_duckdb
 from lib.analysis.build_weekly_duckdb import (
     add_row_hash,
-    build_weekly_duckdb,
     collect_week_csvs,
     dedupe_pooled,
     missing_days,
@@ -36,11 +36,18 @@ _CSV_COLUMNS = [
     "PROP_TYPE_EN",
     "USAGE_EN",
     "NEAREST_METRO_EN",
+    "PROJECT_EN",
+    "MASTER_PROJECT_EN",
     "REGISTRATION_DATE",
     "START_DATE",
     "END_DATE",
     "ANNUAL_AMOUNT",
+    "CONTRACT_AMOUNT",
     "ACTUAL_AREA",
+    "ROOMS",
+    "TOTAL_PROPERTIES",
+    "PARKING",
+    "IS_FREE_HOLD",
 ]
 
 
@@ -52,11 +59,18 @@ def _row(rn: int, registration: str, amount: float = 80000.0, area: float = 1000
         "PROP_TYPE_EN": "Flat",
         "USAGE_EN": "Residential",
         "NEAREST_METRO_EN": "Dubai Marina Metro",
+        "PROJECT_EN": "Marina Tower",
+        "MASTER_PROJECT_EN": "Dubai Marina",
         "REGISTRATION_DATE": registration,
         "START_DATE": "2026-09-01T00:00:00",
         "END_DATE": "2027-08-31T00:00:00",
         "ANNUAL_AMOUNT": amount,
+        "CONTRACT_AMOUNT": amount,
         "ACTUAL_AREA": area,
+        "ROOMS": 2,
+        "TOTAL_PROPERTIES": 1,
+        "PARKING": 0,
+        "IS_FREE_HOLD": 0,
     }
 
 
@@ -133,7 +147,7 @@ def test_build_weekly_dedupes_cross_file_and_records_meta(tmp_path: Path, monkey
     _write_csv(out / "rent_contracts_20260914.csv", [_row(1, DAY1), _row(2, DAY1)])
     _write_csv(out / "rent_contracts_20260915.csv", [_row(3, DAY2)])
 
-    db_path = build_weekly_duckdb(from_date="20260914", to_date="20260915")
+    db_path = build_silver_duckdb(from_date="20260914", to_date="20260915")
 
     con = duckdb.connect(db_path, read_only=True)
     try:
@@ -158,11 +172,10 @@ def test_build_weekly_pools_whole_number_and_decimal_contract_amount(tmp_path: P
     monkeypatch.chdir(tmp_path)
     out = tmp_path / "output"
     out.mkdir()
-    columns = _CSV_COLUMNS + ["CONTRACT_AMOUNT"]
 
     def write(path: Path, rows: list[dict]) -> None:
         with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=columns)
+            writer = csv.DictWriter(f, fieldnames=_CSV_COLUMNS)
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
@@ -175,7 +188,7 @@ def test_build_weekly_pools_whole_number_and_decimal_contract_amount(tmp_path: P
     write(out / "rent_contracts_20260915.csv", [decimal])
 
     # must not raise SchemaError from the concat
-    db_path = build_weekly_duckdb(from_date="20260914", to_date="20260915")
+    db_path = build_silver_duckdb(from_date="20260914", to_date="20260915")
     assert Path(db_path).exists()
 
 
@@ -221,7 +234,7 @@ def test_build_weekly_gate_rejects_missing_day(tmp_path: Path, monkeypatch):
     _write_csv(out / "rent_contracts_20260916.csv", [_row(2, DAY3)])
 
     with pytest.raises(RuntimeError, match="missing/empty"):
-        build_weekly_duckdb(from_date="20260914", to_date="20260916")
+        build_silver_duckdb(from_date="20260914", to_date="20260916")
 
 
 def test_build_weekly_gate_rejects_stale_window(tmp_path: Path, monkeypatch):
@@ -233,4 +246,4 @@ def test_build_weekly_gate_rejects_stale_window(tmp_path: Path, monkeypatch):
         _write_csv(out / f"rent_contracts_{day}.csv", [_row(1, DAY1)])
 
     with pytest.raises(RuntimeError, match="freshness gate failed"):
-        build_weekly_duckdb(from_date="20260914", to_date="20260916")
+        build_silver_duckdb(from_date="20260914", to_date="20260916")

@@ -44,18 +44,22 @@ etl:
 	@echo "Running Ejari rents ETL process..."
 	python run_etl_pipeline.py
 
-# Weekly: 7-day Mon-Sun pooled DuckDB from Releases daily CSVs
+# Weekly: 7-day Mon-Sun pooled. Builds both layer DuckDBs (Silver tables + Gold views)
 weekly:
-	@echo "Building weekly DuckDB (previous complete ISO week)..."
+	@echo "Building weekly layers (previous complete ISO week)..."
 	@WEEK=$$(python3 -c "from datetime import date,timedelta; d=date.today()-timedelta(days=7); y,w,_=d.isocalendar(); print(f'{y}W{w:02d}')"); \
 	echo "Week $$WEEK"; \
 	uv run python -m lib.analysis.build_weekly_duckdb --week $$WEEK
 
 weekly-publish: weekly
-	@echo "Publishing weekly DuckDB to GitHub Release (weekly tag)..."
+	@echo "Publishing weekly Silver and Gold DuckDBs to GitHub Releases..."
 	@test -n "$(WEEK)" || (echo "Usage: make weekly-publish WEEK=2026W37" && exit 1)
-	gh release view release-week-$(WEEK) --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || gh release create release-week-$(WEEK) --repo dataengineergaurav/rental-market-dynamics-dubai --title "Weekly $(WEEK)" --notes "Weekly DuckDB $(WEEK) — 7d pooled enriched fact + gold views" --latest=false
-	gh release upload release-week-$(WEEK) output/rental_analytics_weekly_$(WEEK).duckdb --repo dataengineergaurav/rental-market-dynamics-dubai --clobber
+	@for L in silver gold; do \
+	  tag="release-$$L-$(WEEK)"; \
+	  gh release view "$$tag" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || \
+	    gh release create "$$tag" --repo dataengineergaurav/rental-market-dynamics-dubai --title "$$L $(WEEK)" --notes "Weekly $$L layer $(WEEK) — $$L.duckdb" --latest=false; \
+	  gh release upload "$$tag" output/$${L}_$(WEEK).duckdb --repo dataengineergaurav/rental-market-dynamics-dubai --clobber; \
+	done
 
 # Scrapy rents (paginated, slow ~10s/page) — must run inside rents_scraper/
 scrapy-rents:

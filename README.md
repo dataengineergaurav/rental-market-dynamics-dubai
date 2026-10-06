@@ -11,10 +11,20 @@ Sales, title deeds, and short-term stay data are out of scope. Analysis favors *
 
 | Cadence | Output |
 |---------|--------|
-| **Daily** | Incremental extract → transform/enrich → optional GitHub Release CSV |
-| **Weekly** | Pool recent daily CSVs into a DuckDB analytics database with gold summary views |
+| **Daily** | Incremental extract → transform/enrich → Bronze release (raw CSV) |
+| **Weekly** | Pool recent daily CSVs into two DuckDB layer artifacts: Silver (normalized dim/fact tables) and Gold (analytics views) |
 
-The pipeline treats data in a simple bronze → silver → gold flow under `output/`: raw daily contracts, enriched Parquet, then weekly fact tables and area-level median views.
+The pipeline treats data as a **bronze → silver → gold** flow under `output/`, and each layer is
+published as its own GitHub Release:
+
+| Layer | Artifact | Tag | Contents |
+|-------|----------|-----|----------|
+| **Bronze** | `rent_contracts_YYYYMMDD.csv` | `release-YYYY-MM-DD` | raw daily extract, as returned by the endpoint |
+| **Silver** | `silver_YYYYWww.duckdb` | `release-silver-YYYYWww` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` |
+| **Gold** | `gold_YYYYWww.duckdb` | `release-gold-YYYYWww` | views `gold_area_median`, `gold_standard_lease`, `gold_top_metros_daily`, `AggAreaRentStats`, `AggMetroPremium`, `AggMonthlyRegistrations`, `AggProjectRentStats` |
+
+Gold views read the Silver tables, so a Gold DuckDB resolves only while Silver is attached under the
+`silver` alias — `lib.analysis.layers.connect_gold` does that for you.
 
 ## Data guarantees
 
@@ -41,15 +51,21 @@ EJARI_URL (paginated)
    Extract (Scrapy / downloader)
         │
         ▼
-   Transform + enrich (Polars) ──► Silver contract (validate + row_hash)
-        │
-        ├──► daily CSV release      (empty window → NO_NEW_DATA, exit 0)
+   Bronze: rent_contracts_YYYYMMDD.csv ──► daily release (empty window → NO_NEW_DATA, exit 0)
         │
         ▼
-   Weekly pool ──► freshness gate ──► cross-file dedup ──► DuckDB (fact + gold views)
+   Weekly pool ──► freshness gate ──► cross-file dedup ──► enrich (Polars)
+        │
+        ├──► Silver: silver_YYYYWww.duckdb   (DimArea, DimPropertyType, DimMetro, FctContract)
+        │
+        ▼
+   Gold: gold_YYYYWww.duckdb   (views over the attached Silver tables)
 ```
 
-Orchestration is Make-driven locally and via GitHub Actions (daily ETL, weekly DuckDB build, push builds). See [ADR-07](docs/adr/0007-weekly-cross-file-dedup-and-freshness-gate.md) for why dedup is cross-file and the gate sits at the weekly boundary.
+Orchestration is Make-driven locally and via GitHub Actions (daily ETL, weekly Silver/Gold build,
+push builds). See [ADR-07](docs/adr/0007-weekly-cross-file-dedup-and-freshness-gate.md) for why
+dedup is cross-file and the gate sits at the weekly boundary, and
+[ADR-08](docs/adr/0008-layered-bronze-silver-gold-releases.md) for the layer release contract.
 
 ## Stack
 
@@ -78,14 +94,15 @@ Required environment variables:
 
 ```bash
 make all              # build → daily ETL → tests
-make weekly           # build weekly DuckDB for the previous complete ISO week
+make weekly           # build the weekly Silver + Gold DuckDBs (previous complete ISO week)
 make test             # pytest
 make scrapy-rents     # Scrapy extract only
 ```
 
 Daily entry point: `run_etl_pipeline.py`. Weekly analytics: `python -m lib.analysis.build_weekly_duckdb`,
-which takes `--week 2026W37` or an explicit `--from YYYYMMDD --to YYYYMMDD`; it raises rather than
-build a week its daily files do not cover.
+which takes `--week 2026W37` or an explicit `--from YYYYMMDD --to YYYYMMDD` and builds both layers
+(`--layer silver` or `--layer gold` builds one). It raises rather than build a week its daily files
+do not cover.
 
 ## Layout
 
@@ -100,7 +117,9 @@ docs/             Implementation plan, roadmap, library usage
 
 ## Data & releases
 
-Historical daily CSVs (`release-YYYY-MM-DD`) and weekly DuckDBs (`release-week-YYYYWxx`) are published as [GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
+Each layer is published as its own release: Bronze daily CSVs (`release-YYYY-MM-DD`), and weekly
+Silver/Gold DuckDBs (`release-silver-YYYYWww`, `release-gold-YYYYWww`) — see
+[GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
 
 ## Further reading
 
