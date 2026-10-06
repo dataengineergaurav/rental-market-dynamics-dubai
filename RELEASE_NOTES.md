@@ -14,8 +14,9 @@ This file describes the artifacts the pipeline currently publishes, organized as
 Raw Ejari rent transactions for the day, extracted over an incremental 2-day window. One file per
 data date, contract-level columns as returned by the endpoint (unit area, annual and contract
 amounts, registration/start/end dates, area, property type/usage, nearest metro, parking, project).
-Untransformed — this is the source of truth every later layer is rebuilt from, and the immutable
-dated history.
+Untransformed — this is the source of truth every later layer is rebuilt from. Written once per
+data date by the scheduled daily job; pushes to the repo build and test only and do not
+re-extract it.
 
 Each release also carries `etl_status.json` (`outcome`, `data_date`, window, `data_rows`). On a quiet
 day with no registrations the release contains **only** the status file (`outcome: no_data`), so a

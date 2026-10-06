@@ -14,8 +14,6 @@ jobs:
     env:
       ACTIONS_RUNNER_DEBUG: true
       ACTIONS_STEP_DEBUG: true
-      EJARI_URL: ${{ secrets.EJARI_URL }}
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -24,7 +22,11 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
- 
-      - name: Generate Parquet Dataset
+
+      # Build and test only. The ETL that extracts and publishes the bronze release must NOT run
+      # on push: it re-extracts the current window and clobbers the day's release, racing the
+      # scheduled jobs. Releases are written only by cron.yml and daily_layers.yml.
+      - name: Build and test
         run: |
-          make all
+          make build
+          make test
