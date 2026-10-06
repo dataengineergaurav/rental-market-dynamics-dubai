@@ -202,8 +202,8 @@ FILE_CONFIG = {
 # Explicit dtypes for the RAW Ejari rents CSV (the pre-transform payload).
 #
 # The raw payload is untyped text, so every reader infers from the first
-# `infer_schema_length` rows (polars default 100). Inference is unstable in two
-# ways, each of which has broken a scheduled run:
+# `infer_schema_length` rows (polars default 100). Inference is unstable, and
+# because the columns are only pinned here, ANY column left to inference can flip:
 #
 #   - A column empty through that window falls back to String. PARKING is ~98%
 #     null, so on any day its first 100 rows are empty it is read as String, and
@@ -213,16 +213,79 @@ FILE_CONFIG = {
 #     its siblings infer Float64, and `pl.concat(vertical)` refuses the mismatch
 #     ("failed to vstack column 'CONTRACT_AMOUNT'", weekly 2026W40).
 #
-# RentsTransformer (daily) and build_weekly_duckdb (weekly) read this SAME raw
-# CSV, so they must pin the SAME dtypes or they drift. This is that single site.
+# So this pins the WHOLE payload, not just the columns that have bitten. It is the
+# single schema for every reader of the raw CSV (RentsTransformer daily,
+# build_weekly_duckdb weekly). Adding a payload column without pinning it here
+# re-opens the hole; tests/test_raw_schema.py fails when the set drifts.
+#
+# Types are the payload's natural shape: identifiers/counts are integers, money
+# and area are floats, dates are ISO text (parsed to datetimes downstream), and
+# every label — including the Arabic and the two fully-null columns — is text.
 RAW_RENTS_CSV_DTYPES = {
+    # identifiers and counts
+    "RN": pl.Int64,
+    "TOTAL": pl.Int64,
+    "TOTAL_PROPERTIES": pl.Int64,
+    "AREA_ID": pl.Int64,
+    "IS_FREE_HOLD": pl.Int64,
+    "EJARI_PROPERTY_TYPE_ID": pl.Int64,
+    "EJARI_PROPERTY_SUB_TYPE_ID": pl.Int64,
+    "ROOMS": pl.Int64,
+    "PROPERTY_USAGE_ID": pl.Int64,
+    "PARKING": pl.Int64,
+    "VERSION_NUMBER": pl.Int64,
+    "PROPERTY_ID": pl.Int64,
+    "LAND_PROPERTY_ID": pl.Int64,
+    # money and area
     "CONTRACT_AMOUNT": pl.Float64,
     "ANNUAL_AMOUNT": pl.Float64,
     "ACTUAL_AREA": pl.Float64,
-    "RN": pl.Int64,
-    "TOTAL": pl.Int64,
-    "PARKING": pl.Int64,
+    # dates (ISO text; parsed to datetimes by the transform)
+    "REGISTRATION_DATE": pl.Utf8,
+    "START_DATE": pl.Utf8,
+    "END_DATE": pl.Utf8,
+    # labels — English and Arabic, plus the two fully-null columns
+    "DEFAULT_SORT": pl.Utf8,
+    "IS_FREE_HOLD_EN": pl.Utf8,
+    "IS_FREE_HOLD_AR": pl.Utf8,
+    "VERSION_EN": pl.Utf8,
+    "VERSION_AR": pl.Utf8,
+    "AREA_EN": pl.Utf8,
+    "AREA_AR": pl.Utf8,
+    "PROP_TYPE_EN": pl.Utf8,
+    "PROP_TYPE_AR": pl.Utf8,
+    "PROP_SUB_TYPE_EN": pl.Utf8,
+    "PROP_SUB_TYPE_AR": pl.Utf8,
+    "USAGE_EN": pl.Utf8,
+    "USAGE_AR": pl.Utf8,
+    "NEAREST_METRO_EN": pl.Utf8,
+    "NEAREST_METRO_AR": pl.Utf8,
+    "NEAREST_MALL_EN": pl.Utf8,
+    "NEAREST_MALL_AR": pl.Utf8,
+    "NEAREST_LANDMARK_EN": pl.Utf8,
+    "NEAREST_LANDMARK_AR": pl.Utf8,
+    "PROJECT_EN": pl.Utf8,
+    "PROJECT_AR": pl.Utf8,
+    "MASTER_PROJECT_EN": pl.Utf8,
+    "MASTER_PROJECT_AR": pl.Utf8,
+    "CONTRACT_NUMBER": pl.Utf8,
+    "PARCEL_ID": pl.Utf8,
 }
+
+# The 44 payload columns this schema must cover, in payload order. Kept next to the
+# dtypes so a new payload column is one edit away from being pinned.
+RAW_RENTS_CSV_COLUMNS: tuple[str, ...] = (
+    "RN", "DEFAULT_SORT", "TOTAL", "TOTAL_PROPERTIES", "IS_FREE_HOLD_EN",
+    "IS_FREE_HOLD_AR", "VERSION_EN", "VERSION_AR", "REGISTRATION_DATE", "START_DATE",
+    "END_DATE", "AREA_ID", "AREA_EN", "AREA_AR", "CONTRACT_AMOUNT", "ANNUAL_AMOUNT",
+    "IS_FREE_HOLD", "ACTUAL_AREA", "EJARI_PROPERTY_TYPE_ID", "PROP_TYPE_EN",
+    "PROP_TYPE_AR", "EJARI_PROPERTY_SUB_TYPE_ID", "PROP_SUB_TYPE_EN", "PROP_SUB_TYPE_AR",
+    "ROOMS", "PROPERTY_USAGE_ID", "USAGE_EN", "USAGE_AR", "NEAREST_METRO_EN",
+    "NEAREST_METRO_AR", "NEAREST_MALL_EN", "NEAREST_MALL_AR", "NEAREST_LANDMARK_EN",
+    "NEAREST_LANDMARK_AR", "PARKING", "PROJECT_EN", "PROJECT_AR", "MASTER_PROJECT_EN",
+    "MASTER_PROJECT_AR", "CONTRACT_NUMBER", "VERSION_NUMBER", "PROPERTY_ID",
+    "PARCEL_ID", "LAND_PROPERTY_ID",
+)
 
 
 # Logging Configuration

@@ -14,7 +14,11 @@ This file describes the artifacts the pipeline currently publishes, organized as
 Raw Ejari rent transactions for the day, extracted over an incremental 2-day window. One file per
 data date, contract-level columns as returned by the endpoint (unit area, annual and contract
 amounts, registration/start/end dates, area, property type/usage, nearest metro, parking, project).
-Untransformed and untyped — this is the source of truth every later layer is rebuilt from.
+Untransformed — this is the source of truth every later layer is rebuilt from.
+
+Each release also carries `etl_status.json` (`outcome`, `data_date`, window, `data_rows`). On a quiet
+day with no registrations the release contains **only** the status file (`outcome: no_data`), so a
+missing release means the job did not run while a status-only release means it ran and found nothing.
 
 ### Silver (normalized tables) — `silver_YYYYWww.duckdb` (tag `release-silver-YYYYWww`, weekly)
 

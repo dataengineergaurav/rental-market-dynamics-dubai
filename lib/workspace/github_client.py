@@ -43,14 +43,14 @@ class GitHubRelease:
             "Accept": "application/vnd.github.v3+json"
         }
 
-    def create_release(self, tag_name=None):
+    def create_release(self, tag_name=None, name=None, body=None):
         tag_name = tag_name or f"release-{date.today()}"
-        release_name = tag_name.replace("release-", "Release ", 1)
+        release_name = name or tag_name.replace("release-", "Release ", 1)
 
         release_data = {
             "tag_name": tag_name,
             "name": release_name,
-            "body": "Automated release",
+            "body": body or "Automated release",
             "draft": False,
             "prerelease": False
         }
@@ -105,7 +105,7 @@ class GitHubRelease:
             except Exception as e:
                 logger.error(f"Unexpected error uploading {file}: {e}")
 
-    def publish(self, files, tag_name=None):
+    def publish(self, files, tag_name=None, name=None, body=None):
         try:
             tag_name = tag_name or f"release-{date.today()}"
             if self.release_exists(tag_name):
@@ -115,7 +115,7 @@ class GitHubRelease:
                 release = resp.json()
                 logger.info(f"Reusing existing release {tag_name}")
             else:
-                release = self.create_release(tag_name)
+                release = self.create_release(tag_name, name=name, body=body)
             self.upload_files(release, files)
         except Exception as e:
             logger.error(f"Failed to publish release: {e}")

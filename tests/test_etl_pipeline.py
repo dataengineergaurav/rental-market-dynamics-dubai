@@ -623,3 +623,47 @@ class TestETLPipelineIntegration:
         
         mock_github_class.assert_called_once_with('dataengineergaurav/rental-market-dynamics-dubai')
         mock_publisher.publish.assert_called_once_with(files=test_files, tag_name=None)
+
+    @patch.dict(os.environ, {'GH_TOKEN': 'test_token'})
+    @patch('run_etl_pipeline.GitHubRelease')
+    @patch('run_etl_pipeline.os.path.exists', return_value=True)
+    @patch('run_etl_pipeline.os.path.getsize', return_value=1024)
+    def test_publish_status_marker_tags_the_data_date(self, mock_getsize, mock_exists, mock_github_class):
+        """A marker published without a CSV still tags the data date, not today.
+
+        The no-data marker has no `rent_contracts_*.csv` to derive the tag from, so the tag must be
+        passed explicitly or a quiet day lands under the wrong date.
+        """
+        mock_publisher = Mock()
+        mock_github_class.return_value = mock_publisher
+        status = "output/etl_status.json"
+
+        with patch('run_etl_pipeline.logger'):
+            from run_etl_pipeline import publish_artifacts_to_github
+            publish_artifacts_to_github([status], data_date="20261005")
+
+        mock_publisher.publish.assert_called_once_with(files=[status], tag_name="release-2026-10-05")
+
+    @patch.dict(os.environ, {'EJARI_URL': 'https://example.com/test', 'GH_TOKEN': 'test_token'})
+    @patch('run_etl_pipeline.GitHubRelease')
+    @patch('run_etl_pipeline._data_rows', return_value=0)
+    def test_main_no_data_publishes_the_status_marker(self, mock_data_rows, mock_github_class, tmp_path, monkeypatch):
+        """A quiet day must leave a self-describing release, so 'no release' means 'never ran'."""
+        from datetime import datetime, timedelta, timezone
+
+        def fake_download(url, filename, *args, **kwargs):
+            Path(filename).write_text("")  # empty placeholder -> no data
+            return True
+
+        monkeypatch.chdir(tmp_path)
+        with patch('run_etl_pipeline.download_rents', side_effect=fake_download), \
+             patch('run_etl_pipeline.logger'):
+            from run_etl_pipeline import main
+            assert main() is True
+
+        publish = mock_github_class.return_value.publish
+        assert publish.called, "no-data must still publish a marker"
+        published = publish.call_args.kwargs
+        assert published["files"] == ["output/etl_status.json"]
+        expected_date = (datetime.now(timezone.utc).date() - timedelta(days=1)).strftime("%Y%m%d")
+        assert published["tag_name"] == f"release-{expected_date[:4]}-{expected_date[4:6]}-{expected_date[6:8]}"

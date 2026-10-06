@@ -54,12 +54,7 @@ weekly:
 weekly-publish: weekly
 	@echo "Publishing weekly Silver and Gold DuckDBs to GitHub Releases..."
 	@test -n "$(WEEK)" || (echo "Usage: make weekly-publish WEEK=2026W37" && exit 1)
-	@for L in silver gold; do \
-	  tag="release-$$L-$(WEEK)"; \
-	  gh release view "$$tag" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || \
-	    gh release create "$$tag" --repo dataengineergaurav/rental-market-dynamics-dubai --title "$$L $(WEEK)" --notes "Weekly $$L layer $(WEEK) — $$L.duckdb" --latest=false; \
-	  gh release upload "$$tag" output/$${L}_$(WEEK).duckdb --repo dataengineergaurav/rental-market-dynamics-dubai --clobber; \
-	done
+	uv run python -m lib.workspace.publish_layers --week $(WEEK) --silver output/silver_$(WEEK).duckdb --gold output/gold_$(WEEK).duckdb
 
 # Scrapy rents (paginated, slow ~10s/page) — must run inside rents_scraper/
 scrapy-rents:

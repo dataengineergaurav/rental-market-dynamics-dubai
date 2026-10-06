@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **No-data release markers.** Every daily run now publishes `etl_status.json` to its
+  `release-YYYY-MM-DD`, including quiet days that produce no CSV. A missing release now means the
+  job never ran; a release without a CSV means no data — previously the two were indistinguishable.
+- **Whole raw CSV schema pinned.** `RAW_RENTS_CSV_DTYPES` now covers all 44 payload columns, not
+  just the ones that have bitten, so no column is left to per-file inference. `tests/test_raw_schema.py`
+  fails if a payload column is added without pinning it.
+- **One publish client.** Weekly Silver/Gold publication moved off the `gh` CLI (workflow + Makefile)
+  to `lib.workspace.publish_layers` over `GitHubRelease`; daily bronze and weekly layers now share a
+  single publish path that clobbers existing assets.
 - **Layered Bronze/Silver/Gold releases.** The weekly artifact is split into two DuckDBs:
   `silver_YYYYWww.duckdb` (normalized `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`,
   `_meta` tables) tagged `release-silver-YYYYWww`, and `gold_YYYYWww.duckdb` (seven analytics

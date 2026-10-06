@@ -28,9 +28,12 @@ Gold views read the Silver tables, so a Gold DuckDB resolves only while Silver i
 
 ## Data guarantees
 
-- **The daily job is fail-open.** An empty incremental window is a success, not an error, but it is
-  never silent: the run writes `output/etl_status.json` and logs a greppable `NO_NEW_DATA` line. A
-  *missing* file after a successful download is not treated as "no data" — it proceeds and fails.
+- **The daily job is fail-open, and every run is marked.** An empty incremental window is a success,
+  not an error, but it is never silent: the run writes `output/etl_status.json` and logs a greppable
+  `NO_NEW_DATA` line. That status is also published to the day's release, so a release with no CSV is
+  a *quiet day* and a missing release is a run that never happened — the two are distinguishable from
+  the releases list alone. A *missing* file after a successful download is not treated as "no data" —
+  it proceeds and fails.
 - **Cross-file dedup.** The extract uses a 2-day window, so a registration can appear in two
   consecutive daily files. The weekly build drops rows repeating a `row_hash` first seen in an
   earlier file, before enrichment, so Gold medians and counts are not double-counted.

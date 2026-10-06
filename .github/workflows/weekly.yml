@@ -82,19 +82,14 @@ jobs:
 
       - name: Publish Silver and Gold to Releases
         run: |
-          # Resolve the week from the workflow input exactly like the build step. Reading it back
-          # out of $GITHUB_ENV silently fell through to the "previous week" fallback and tagged the
-          # wrong week, so the tag and the asset disagreed.
+          # Resolve the week from the workflow input exactly like the build step, then publish via
+          # the shared client. (Reading it back from $GITHUB_ENV once tagged the wrong week.)
           WEEK="${{ inputs.week }}"
           [ -n "$WEEK" ] || WEEK=$(date -d "7 days ago" +%GW%V)
-          for L in silver gold; do
-            FILE="output/${L}_${WEEK}.duckdb"
-            [ -f "$FILE" ] || { echo "missing $FILE — refusing to publish a mislabelled asset"; exit 1; }
-            TAG="release-${L}-${WEEK}"
-            gh release view "$TAG" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || \
-              gh release create "$TAG" --repo dataengineergaurav/rental-market-dynamics-dubai --title "${L} ${WEEK}" --notes "Weekly ${L} layer ${WEEK} — $(basename "$FILE")" --latest=false
-            gh release upload "$TAG" "$FILE" --repo dataengineergaurav/rental-market-dynamics-dubai --clobber
-          done
+          uv run python -m lib.workspace.publish_layers \
+            --week "$WEEK" \
+            --silver "output/silver_$WEEK.duckdb" \
+            --gold "output/gold_$WEEK.duckdb"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 

@@ -219,8 +219,13 @@ def analyze_property_usage(input_parquet: str, output_report: str) -> bool:
         raise
 
 
-def publish_artifacts_to_github(files: list, release_notes: str = "RELEASE_NOTES.md") -> None:
-    """Publish data artifacts to GitHub Release."""
+def publish_artifacts_to_github(files: list, release_notes: str = "RELEASE_NOTES.md", data_date: str | None = None) -> None:
+    """Publish data artifacts to GitHub Release.
+
+    `data_date` (YYYYMMDD) sets the tag to release-YYYY-MM-DD explicitly. It is required when the
+    file list has no `rent_contracts_*.csv` — the no-data marker publishes a status file only, and
+    the tag must still be the data date, not today's.
+    """
     logger.info("=== PHASE 4: PUBLISH ===")
 
     if not os.getenv("GH_TOKEN"):
@@ -236,14 +241,17 @@ def publish_artifacts_to_github(files: list, release_notes: str = "RELEASE_NOTES
         logger.info(f"  - {f} ({os.path.getsize(f) / (1024 * 1024):.1f} MB)")
 
     try:
-        # tag the release with the data date (from rent_contracts_YYYYMMDD.csv) so
-        # weekly rehydrate (release-<Mon..Sun>) keeps matching tag <-> file
-        tag_name = None
-        for f in existing_files:
-            m = re.search(r"rent_contracts_(\d{4})(\d{2})(\d{2})", os.path.basename(f))
-            if m:
-                tag_name = f"release-{m.group(1)}-{m.group(2)}-{m.group(3)}"
-                break
+        if data_date:
+            tag_name = f"release-{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
+        else:
+            # tag the release with the data date (from rent_contracts_YYYYMMDD.csv) so
+            # weekly rehydrate (release-<Mon..Sun>) keeps matching tag <-> file
+            tag_name = None
+            for f in existing_files:
+                m = re.search(r"rent_contracts_(\d{4})(\d{2})(\d{2})", os.path.basename(f))
+                if m:
+                    tag_name = f"release-{m.group(1)}-{m.group(2)}-{m.group(3)}"
+                    break
         GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai').publish(files=existing_files, tag_name=tag_name)
         logger.info("GitHub publication complete!")
     except Exception as e:
@@ -292,6 +300,12 @@ def main():
                 f"({csv_filename} is empty or a placeholder); skipping transform/analyze"
             )
             _write_run_status(output_dir, outcome="no_data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=0)
+            if os.getenv("GH_TOKEN"):
+                # Quiet day: publish the status marker so the release list is self-describing. A
+                # missing release then means the job never ran; a release with no CSV means no data.
+                publish_artifacts_to_github(
+                    [str(output_dir / "etl_status.json")], data_date=date_str
+                )
             logger.info("=" * 60)
             logger.info("ETL PIPELINE COMPLETED — NO NEW DATA (incremental)")
             logger.info("=" * 60)
@@ -309,14 +323,18 @@ def main():
         except Exception as e:
             logger.warning(f"Analyze skipped: {e}")
 
+        # write the run status BEFORE publishing: it is published as an asset, so it must exist
+        _write_run_status(output_dir, outcome="data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=_data_rows(csv_filename))
+
         if os.getenv("GH_TOKEN"):
-            # Bronze (raw) layer: the untransformed daily CSV is the published bronze artifact.
-            # Parquet/report stay local — Silver/Gold are built weekly (see lib/analysis).
-            publish_artifacts_to_github([str(csv_filename)])
+            # Bronze (raw) layer: the untransformed daily CSV is the published bronze artifact,
+            # with the run status riding along so every release is self-describing. Parquet/report
+            # stay local — Silver/Gold are built weekly (see lib/analysis).
+            publish_artifacts_to_github(
+                [str(csv_filename), str(output_dir / "etl_status.json")], data_date=date_str
+            )
         else:
             logger.info("Skipping GitHub publication (GH_TOKEN not set)")
-
-        _write_run_status(output_dir, outcome="data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=_data_rows(csv_filename))
 
         logger.info("=" * 60)
         logger.info("ETL PIPELINE COMPLETED SUCCESSFULLY")
