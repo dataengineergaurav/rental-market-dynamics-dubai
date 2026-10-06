@@ -82,11 +82,14 @@ jobs:
 
       - name: Publish Silver and Gold to Releases
         run: |
-          WEEK=$(cat $GITHUB_ENV 2>/dev/null | grep WEEK= | cut -d= -f2)
+          # Resolve the week from the workflow input exactly like the build step. Reading it back
+          # out of $GITHUB_ENV silently fell through to the "previous week" fallback and tagged the
+          # wrong week, so the tag and the asset disagreed.
+          WEEK="${{ inputs.week }}"
           [ -n "$WEEK" ] || WEEK=$(date -d "7 days ago" +%GW%V)
           for L in silver gold; do
-            FILE=$(ls -1 output/${L}_${WEEK}.duckdb 2>/dev/null | tail -1)
-            [ -n "$FILE" ] || FILE=$(ls -1 output/${L}_*.duckdb | tail -1)
+            FILE="output/${L}_${WEEK}.duckdb"
+            [ -f "$FILE" ] || { echo "missing $FILE — refusing to publish a mislabelled asset"; exit 1; }
             TAG="release-${L}-${WEEK}"
             gh release view "$TAG" --repo dataengineergaurav/rental-market-dynamics-dubai >/dev/null 2>&1 || \
               gh release create "$TAG" --repo dataengineergaurav/rental-market-dynamics-dubai --title "${L} ${WEEK}" --notes "Weekly ${L} layer ${WEEK} — $(basename "$FILE")" --latest=false
