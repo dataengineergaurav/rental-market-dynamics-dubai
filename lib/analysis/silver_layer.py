@@ -180,7 +180,7 @@ def meta_sql(ingested_window: str) -> str:
     """
     return (
         "CREATE OR REPLACE TABLE _meta AS SELECT "
-        "now() AS built_at, "
+        "CAST(now() AS TIMESTAMP) AS built_at, "
         "(SELECT min(CAST(contract_registration_date AS DATE)) FROM FctContract) AS data_from, "
         "(SELECT max(CAST(contract_registration_date AS DATE)) FROM FctContract) AS data_through, "
         "(SELECT count(*) FROM FctContract) AS total_contracts, "
