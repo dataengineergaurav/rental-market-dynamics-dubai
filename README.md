@@ -20,8 +20,10 @@ Gold live together in a single **cumulative** store that grows every day:
 | Layer | Artifact | Tag | Contents |
 |-------|----------|-----|----------|
 | **Bronze** | `rent_contracts_YYYYMMDD.csv` | `release-YYYY-MM-DD` | raw daily extract, as returned by the endpoint |
-| **Silver** | `rents_layers.duckdb` | `release-layers-latest` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` |
-| **Gold** | `rents_layers.duckdb` | `release-layers-latest` | views `gold_area_median`, `gold_standard_lease`, `gold_top_metros_daily`, `AggAreaRentStats`, `AggMetroPremium`, `AggMonthlyRegistrations`, `AggProjectRentStats` |
+| **Silver** | `rents_layers.duckdb` | `release-YYYY-MM-DD` | tables `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`, `_meta` |
+| **Gold** | `rents_layers.duckdb` | `release-YYYY-MM-DD` | views `gold_area_median`, `gold_standard_lease`, `gold_top_metros_daily`, `AggAreaRentStats`, `AggMetroPremium`, `AggMonthlyRegistrations`, `AggProjectRentStats` |
+
+One release per data date (`release-YYYY-MM-DD`) holds the raw CSV, `etl_status.json` and the combined `rents_layers.duckdb` together.
 
 The Silver tables and the Gold views are in the **same** DuckDB file, so a plain
 `duckdb.connect("rents_layers.duckdb")` resolves every view — no `ATTACH`, no alias. The store is
@@ -101,7 +103,7 @@ Required environment variables:
 ```bash
 make all              # build → daily ETL → tests
 make layers           # ingest today's CSV into the cumulative layers DuckDB
-make layers-publish   # publish the layers DuckDB to release-layers-latest
+make layers-publish   # publish the layers DuckDB into the day's release
 make test             # pytest
 make scrapy-rents     # Scrapy extract only
 ```
@@ -124,10 +126,11 @@ docs/             Implementation plan, roadmap, library usage
 
 ## Data & releases
 
-Bronze is one release per day (`release-YYYY-MM-DD`). The combined Silver+Gold store is published to
-the stable tag `release-layers-latest` (its asset is clobbered each daily run) — see
+One release per data date (`release-YYYY-MM-DD`) carries the raw CSV, `etl_status.json` and the
+combined `rents_layers.duckdb` — see
 [GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
-Exact historical layer files are reproducible from the immutable dated bronze releases.
+Each day's release holds a full snapshot of the cumulative DuckDB as of that date, so any
+historical layer file is also directly retrievable.
 
 ## Further reading
 

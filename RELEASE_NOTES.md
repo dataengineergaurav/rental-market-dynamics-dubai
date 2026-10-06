@@ -21,11 +21,12 @@ Each release also carries `etl_status.json` (`outcome`, `data_date`, window, `da
 day with no registrations the release contains **only** the status file (`outcome: no_data`), so a
 missing release means the job did not run while a status-only release means it ran and found nothing.
 
-### Silver + Gold (one cumulative file) — `rents_layers.duckdb` (tag `release-layers-latest`, daily)
+### Silver + Gold (one cumulative file) — `rents_layers.duckdb` (in the day's `release-YYYY-MM-DD`)
 
 A single DuckDB that is **cumulative** and **updated every day**: the day's contracts are upserted
 into it. It holds both the normalized Silver tables and the Gold analytics views, in the same file,
-so a plain `duckdb.connect` resolves every view (no `ATTACH`).
+so a plain `duckdb.connect` resolves every view (no `ATTACH`). It is published into the day's
+release (`release-YYYY-MM-DD`) alongside the raw CSV — **one release per data date**.
 
 | Object | Type | Description |
 |--------|------|-------------|

@@ -1,11 +1,13 @@
-"""Publish the combined layers DuckDB to its own stable release tag.
+"""Publish the combined layers DuckDB into the day's release.
 
-This is the single publishing path for the layers store — it uses the same `GitHubRelease`
-client (`lib.workspace.github_client`) as the daily bronze publish, which clobbers existing
-assets so the tag always carries the newest file.
+There is one release per data date (`release-YYYY-MM-DD`) — the same tag the daily bronze CSV is
+published to — and it carries the raw CSV, `etl_status.json` and the cumulative `rents_layers.duckdb`
+together. This module adds the DuckDB to that release via the shared `GitHubRelease` client, which
+reuses an existing release for the tag (the bronze job usually created it first) and clobbers any
+same-named asset.
 
 Usage:
-  uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb
+  uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb --data-through 2026-10-05
 """
 from __future__ import annotations
 
@@ -18,42 +20,38 @@ from lib.workspace.github_client import GitHubRelease
 logger = logging.getLogger(__name__)
 
 DEFAULT_REPO = "dataengineergaurav/rental-market-dynamics-dubai"
-DEFAULT_TAG = "release-layers-latest"
 
 
 def publish_layers(
     artifact_path: str | Path,
     repo: str = DEFAULT_REPO,
-    tag: str = DEFAULT_TAG,
+    tag: str | None = None,
     data_through: str | None = None,
 ) -> str:
-    """Publish the combined DuckDB to `tag` (default: the stable `release-layers-latest`).
+    """Publish the combined DuckDB to the day's release tag.
 
-    A missing artifact fails loudly before any upload, so the tag is never created without its
-    asset. The GitHubRelease client reuses an existing release for the tag and deletes the
-    same-named asset first, so a same-day re-run refreshes idempotently. Returns the tag.
+    The tag is `release-<data_through>` unless one is passed explicitly. A missing artifact fails
+    loudly before any upload. The release is not named/annotated here: it is the same release the
+    bronze job creates, so it keeps its name/body and simply gains this asset. Returns the tag.
     """
     artifact = Path(artifact_path)
     if not artifact.exists():
         raise FileNotFoundError(f"layers artifact not found: {artifact}")
 
-    body = "Combined Silver+Gold DuckDB (cumulative)."
-    if data_through:
-        body += f" Data through {data_through}."
-    GitHubRelease(repo).publish(
-        files=[str(artifact)],
-        tag_name=tag,
-        name="layers latest" + (f" (data through {data_through})" if data_through else ""),
-        body=body,
-    )
+    if tag is None:
+        if not data_through:
+            raise ValueError("publish_layers needs --tag or --data-through (to derive release-<date>)")
+        tag = f"release-{data_through}"
+
+    GitHubRelease(repo).publish(files=[str(artifact)], tag_name=tag)
     return tag
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Publish the combined layers DuckDB")
+    parser = argparse.ArgumentParser(description="Publish the combined layers DuckDB into the day's release")
     parser.add_argument("--artifact", required=True, help="path to the layers DuckDB")
-    parser.add_argument("--tag", default=DEFAULT_TAG, help=f"release tag (default {DEFAULT_TAG})")
-    parser.add_argument("--data-through", help="max registration date, for the release notes")
+    parser.add_argument("--tag", help="release tag (default: release-<data-through>)")
+    parser.add_argument("--data-through", help="max registration date YYYY-MM-DD; derives the tag")
     parser.add_argument("--repo", default=DEFAULT_REPO, help="owner/repo to publish to")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)

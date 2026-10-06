@@ -32,25 +32,35 @@ jobs:
       - name: Install deps
         run: pip install -q -r requirements.txt && pip install -q lib/ && pip install -q duckdb pyarrow
 
-      - name: Refresh previous layers DuckDB (stable tag)
-        run: |
-          mkdir -p output
-          # The store is cumulative: pull yesterday's file and upsert today's contracts into it.
-          gh release download release-layers-latest \
-            --repo dataengineergaurav/rental-market-dynamics-dubai \
-            --pattern "rents_layers.duckdb" --dir output --clobber \
-            || echo "no previous layers artifact (cold start)"
-          ls -lh output/rents_layers.duckdb || true
-
-      - name: Download today's bronze CSV
+      - name: Resolve data date
         run: |
           DATE="${{ inputs.data_date }}"
           if [ -z "$DATE" ]; then DATE=$(date -u -d "yesterday" +%Y-%m-%d); fi
           echo "DATA_DATE=$DATE" >> $GITHUB_ENV
-          gh release download "release-$DATE" \
+          echo "data date: $DATE"
+
+      - name: Refresh previous layers DuckDB (from an earlier dated release)
+        run: |
+          mkdir -p output
+          # The store is cumulative and lives in the day's release, so pull the most recent
+          # release (within 30 days) that actually carries it, then upsert today's contracts.
+          # A quiet day still has a release but no DB asset, so skip forward past gaps.
+          for i in $(seq 0 30); do
+            D=$(date -u -d "$DATA_DATE - $i days" +%Y-%m-%d)
+            if gh release download "release-$D" \
+                 --repo dataengineergaurav/rental-market-dynamics-dubai \
+                 --pattern "rents_layers.duckdb" --dir output --clobber 2>/dev/null; then
+              echo "pulled prior layers from release-$D"; break
+            fi
+          done
+          ls -lh output/rents_layers.duckdb 2>/dev/null || echo "no prior layers (cold start)"
+
+      - name: Download today's bronze CSV
+        run: |
+          gh release download "release-$DATA_DATE" \
             --repo dataengineergaurav/rental-market-dynamics-dubai \
             --pattern "rent_contracts_*.csv" --dir output --clobber \
-            || echo "no CSV for release-$DATE (quiet day)"
+            || echo "no CSV for release-$DATA_DATE (quiet day)"
           ls -lh output/rent_contracts_*.csv || true
 
       - name: Ingest into the cumulative layers DuckDB
@@ -70,18 +80,13 @@ jobs:
           c.close()
           PY
 
-      - name: Publish layers to Releases
+      - name: Publish layers into the day's release
         if: hashFiles('output/rents_layers.duckdb') != ''
         run: |
-          DATA_THROUGH=$(uv run python - << 'PY'
-          import duckdb
-          c = duckdb.connect("output/rents_layers.duckdb", read_only=True)
-          print(c.execute("SELECT data_through FROM _meta").fetchone()[0])
-          c.close()
-          PY
-          )
+          # Same tag the bronze CSV is published to: one release per day holds the raw CSV and
+          # the combined DuckDB together.
           uv run python -m lib.workspace.publish_layers \
-            --artifact output/rents_layers.duckdb --data-through "$DATA_THROUGH"
+            --artifact output/rents_layers.duckdb --tag "release-$DATA_DATE"
 
       - name: Run tests
         run: uv run pytest -q
