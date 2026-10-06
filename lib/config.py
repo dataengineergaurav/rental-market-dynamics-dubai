@@ -199,6 +199,32 @@ FILE_CONFIG = {
 }
 
 
+# Explicit dtypes for the RAW Ejari rents CSV (the pre-transform payload).
+#
+# The raw payload is untyped text, so every reader infers from the first
+# `infer_schema_length` rows (polars default 100). Inference is unstable in two
+# ways, each of which has broken a scheduled run:
+#
+#   - A column empty through that window falls back to String. PARKING is ~98%
+#     null, so on any day its first 100 rows are empty it is read as String, and
+#     Silver's `cast(Boolean)` has no String->Boolean path ("casting from
+#     Utf8View to Boolean not supported", daily run 2026-10-05).
+#   - A money column that is whole-number in one daily file infers Int64 while
+#     its siblings infer Float64, and `pl.concat(vertical)` refuses the mismatch
+#     ("failed to vstack column 'CONTRACT_AMOUNT'", weekly 2026W40).
+#
+# RentsTransformer (daily) and build_weekly_duckdb (weekly) read this SAME raw
+# CSV, so they must pin the SAME dtypes or they drift. This is that single site.
+RAW_RENTS_CSV_DTYPES = {
+    "CONTRACT_AMOUNT": pl.Float64,
+    "ANNUAL_AMOUNT": pl.Float64,
+    "ACTUAL_AREA": pl.Float64,
+    "RN": pl.Int64,
+    "TOTAL": pl.Int64,
+    "PARKING": pl.Int64,
+}
+
+
 # Logging Configuration
 LOG_CONFIG = {
     "log_format": "%(asctime)s [%(levelname)8s] %(name)s:%(lineno)s %(message)s",

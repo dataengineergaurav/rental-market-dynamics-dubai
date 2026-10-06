@@ -491,6 +491,41 @@ class TestETLPipelineIntegration:
         assert "contract_id" not in written.columns, "CONTRACT_NUMBER is 100% null; alias removed"
         assert set(written.columns) == set(SilverRentContract.model_fields)
 
+    def test_transform_rents_pins_parking_through_the_inference_window(self, tmp_path):
+        """PARKING is ~98% null. When its first 100 rows are empty, polars'
+        default infer_schema_length reads it as String, and String -> Boolean is
+        not a cast polars supports, so to_silver raised "casting from Utf8View to
+        Boolean not supported" (daily run 2026-10-05). Pinning PARKING:Int64 in
+        the raw-CSV dtypes makes the inference window irrelevant.
+        """
+        import run_etl_pipeline
+
+        csv = tmp_path / "rent_contracts_20261005.csv"
+        parquet = tmp_path / "rent_contracts_20261005.parquet"
+        n = 130
+        pl.DataFrame({
+            "RN": list(range(1, n + 1)),
+            "AREA_EN": ["Dubai Marina"] * n,
+            "USAGE_EN": ["Residential"] * n,
+            "PROP_TYPE_EN": ["Unit"] * n,
+            "PROP_SUB_TYPE_EN": ["Flat"] * n,
+            "START_DATE": ["2026-09-20T00:00:00"] * n,
+            "END_DATE": ["2027-09-19T00:00:00"] * n,
+            "REGISTRATION_DATE": ["2026-09-12T00:03:07"] * n,
+            "ANNUAL_AMOUNT": [90000.0] * n,
+            "CONTRACT_AMOUNT": [90000.0] * n,
+            "ACTUAL_AREA": [900.0] * n,
+            "IS_FREE_HOLD": [1] * n,
+            "VERSION_EN": ["New"] * n,
+            "TOTAL_PROPERTIES": [1] * n,
+            # empty through the whole 100-row inference window; value only after it
+            "PARKING": [None] * 120 + [1] * 10,
+        }).write_csv(csv)
+
+        assert run_etl_pipeline.transform_rents(str(csv), str(parquet)) is True
+        written = pl.read_parquet(parquet)
+        assert written["has_parking"].to_list() == [False] * 120 + [True] * 10
+
     def test_transform_rents_does_not_swallow_a_broken_silver_import(self, tmp_path):
         """The P0.3 incident was an IMPORT failure — a module-level NameError
         that the old `except Exception` logged as 'Validation gate skipped' and
