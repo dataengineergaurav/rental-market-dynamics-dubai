@@ -1,0 +1,12 @@
+# Taste
+- Prefers high-level documentation in README files — wants a conceptual overview rather than exhaustive detail. Confidence: 0.65
+- Expects documentation to be updated alongside code for anything crucial (ADRs, README, CHANGELOG, release notes), not just the code change itself. Confidence: 0.7
+- Prefers Python with DuckDB and Pydantic for data analysis code. Confidence: 0.7
+- Does not want dbt used in projects — avoids it entirely. Confidence: 0.75
+- Works from written implementation plans: expects the plan to be followed exactly as specified, the plan file left unedited, and to-do items executed in order (marked in_progress) without stopping until all are complete. Confidence: 0.7
+- Considers to-do items already created and does not want them re-created. Confidence: 0.6
+- Asks for the agent's intuition/opinion on a project's current status. Confidence: 0.5
+- When auditing a codebase, wants findings delivered as a prioritized list of things to fix (severity-ranked, e.g. P0/P1/P2), not a flat overview. Confidence: 0.55
+- Likes the agent to adopt an explicit expert persona/role (e.g. "act as a data engineer with an analytics engineering background") when analyzing code. Confidence: 0.5
+- Expects completed work to reach GitHub — checks whether changes were committed and pushed, and asks for it explicitly ("commit and push"). Confidence: 0.7
+- Approves of post-merge cleanup — fast-forwarding local `main` and deleting merged local and remote feature branches. Confidence: 0.5

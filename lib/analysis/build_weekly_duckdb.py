@@ -33,7 +33,7 @@ import duckdb
 import polars as pl
 
 from lib.classes.silver_contract import _ROW_HASH_FIELDS, _row_hash
-from lib.config import WEEKLY_FRESHNESS_GATE
+from lib.config import RAW_RENTS_CSV_DTYPES, WEEKLY_FRESHNESS_GATE
 from lib.transform.enrichment import enrich_rent_contracts
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,16 @@ def build_weekly_duckdb(week: str | None = None, from_date: str | None = None, t
 
     dfs = []
     for file_idx, f in enumerate(files):
-        df = pl.read_csv(str(f), encoding="utf8-lossy", ignore_errors=True, null_values=["null", "NULL", ""])
+        # Same pinned dtypes as the daily transformer: per-file inference lets a
+        # whole-number money column land Int64 in one file and Float64 in the
+        # next, and pl.concat(vertical) below refuses that mismatch.
+        df = pl.read_csv(
+            str(f),
+            encoding="utf8-lossy",
+            ignore_errors=True,
+            null_values=["null", "NULL", ""],
+            schema_overrides=RAW_RENTS_CSV_DTYPES,
+        )
         # provenance for cross-file dedup: the file's position in the requested
         # window, so "earlier file" does not depend on column order or glob order.
         dfs.append(df.with_columns(pl.lit(file_idx, dtype=pl.Int64).alias("_file_idx")))

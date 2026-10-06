@@ -4,7 +4,7 @@ Fields: REGISTRATION_DATE, START_DATE, END_DATE, AREA_EN, ANNUAL_AMOUNT, CONTRAC
 """
 import logging
 import polars as pl
-from lib.config import FILE_CONFIG
+from lib.config import FILE_CONFIG, RAW_RENTS_CSV_DTYPES
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +24,9 @@ class RentsTransformer:
                 # instead of being silently replaced with U+FFFD.
                 encoding="utf8",
                 ignore_errors=True,
-                schema_overrides={
-                    "CONTRACT_AMOUNT": pl.Float64,
-                    "ANNUAL_AMOUNT": pl.Float64,
-                    "ACTUAL_AREA": pl.Float64,
-                    "RN": pl.Int64,
-                    "TOTAL": pl.Int64,
-                },
+                # PARKING included: null through the 100-row inference window it
+                # would be read as String, which Silver cannot cast to Boolean.
+                schema_overrides=RAW_RENTS_CSV_DTYPES,
             )
             # Parse rent dates (ISO like 2026-09-10T00:11:17)
             schema_cols = pl.scan_csv(self.input_file, n_rows=0).collect_schema().names()

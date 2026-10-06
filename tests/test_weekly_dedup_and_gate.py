@@ -148,6 +148,37 @@ def test_build_weekly_dedupes_cross_file_and_records_meta(tmp_path: Path, monkey
     assert meta == (3, 2, 1, 2, 2, 0, "2026-09-15")
 
 
+def test_build_weekly_pools_whole_number_and_decimal_contract_amount(tmp_path: Path, monkeypatch):
+    """CONTRACT_AMOUNT is untyped text in the raw daily CSV. A day whose amounts
+    are all whole numbers reads back Int64 while a sibling with decimals reads
+    Float64, and `pl.concat(vertical)` refuses the mismatch — the 2026W40 weekly
+    failure ("failed to vstack column 'CONTRACT_AMOUNT'"). The raw-CSV dtypes
+    must be pinned so per-file inference cannot split them.
+    """
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "output"
+    out.mkdir()
+    columns = _CSV_COLUMNS + ["CONTRACT_AMOUNT"]
+
+    def write(path: Path, rows: list[dict]) -> None:
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+
+    whole = _row(1, DAY1)
+    whole["CONTRACT_AMOUNT"] = 90000  # "90000" infers Int64
+    decimal = _row(2, DAY2)
+    decimal["CONTRACT_AMOUNT"] = 90000.5  # "90000.5" infers Float64
+    write(out / "rent_contracts_20260914.csv", [whole])
+    write(out / "rent_contracts_20260915.csv", [decimal])
+
+    # must not raise SchemaError from the concat
+    db_path = build_weekly_duckdb(from_date="20260914", to_date="20260915")
+    assert Path(db_path).exists()
+
+
 def test_data_rows_distinguishes_placeholder_from_data(tmp_path: Path):
     assert _data_rows(tmp_path / "missing.csv") == 0
 
