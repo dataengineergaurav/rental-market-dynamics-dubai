@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(cd:*)",
+      "Shell(uv:*)",
+      "Shell(git:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
