@@ -18,6 +18,7 @@ Shapes:
 
 This module only defines the DDL and the insert/`_meta` SQL; `build_layers_duckdb` executes it.
 """
+
 from __future__ import annotations
 
 FACT_TABLE = "FctContract"

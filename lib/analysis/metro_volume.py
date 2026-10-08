@@ -7,6 +7,7 @@ resolves the view (see lib.analysis.layers).
 Usage:
   uv run python -m lib.analysis.metro_volume --db output/rents_layers.duckdb
 """
+
 from __future__ import annotations
 
 import argparse
@@ -115,9 +116,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     result = query_top_metros_daily(args.db)
-    out = Path(args.output) if args.output else Path(
-        f"output/top_metros_daily_{Path(args.db).stem}.csv"
-    )
+    out = Path(args.output) if args.output else Path(f"output/top_metros_daily_{Path(args.db).stem}.csv")
     export_csv(result, out)
     logger.info(
         "Wrote %s — %d rows%s",
@@ -126,10 +125,7 @@ def main():
         f" (data through {result.data_through})" if result.data_through else "",
     )
     for row in result.rows[:15]:
-        print(
-            f"{row.contract_reg_date}  #{row.contract_rank}  "
-            f"{row.number_of_rent_contracts:5d}  {row.nearest_metro}"
-        )
+        print(f"{row.contract_reg_date}  #{row.contract_rank}  {row.number_of_rent_contracts:5d}  {row.nearest_metro}")
     if len(result.rows) > 15:
         print(f"... ({len(result.rows) - 15} more)")
 

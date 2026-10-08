@@ -13,6 +13,7 @@ Usage:
 Output: `output/rents_layers.duckdb` (default) — tables DimArea, DimPropertyType, DimMetro,
 FctContract, _meta, plus the seven Gold views.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -139,9 +140,7 @@ def _csv_data_date(path: Path) -> date | None:
 
 
 def _ensure_columns(df: pl.DataFrame) -> pl.DataFrame:
-    missing = [
-        (c, _NULL_DTYPES.get(c, pl.Utf8)) for c in _SOURCE_COLUMNS if c not in df.columns
-    ]
+    missing = [(c, _NULL_DTYPES.get(c, pl.Utf8)) for c in _SOURCE_COLUMNS if c not in df.columns]
     if missing:
         df = df.with_columns([pl.lit(None, dtype=dt).alias(c) for c, dt in missing])
     return df
@@ -193,18 +192,14 @@ def _prepare_increment(csv_paths: list[Path]) -> pl.DataFrame:
 
     # Increment-local dedup so the single INSERT OR REPLACE cannot see two rows for one key
     # (DuckDB rejects that). Cross-run overlap is handled by the PK itself.
-    enriched = enriched.filter(pl.col("contract_id").is_not_null()).unique(
-        subset=["contract_id"], keep="last"
-    )
+    enriched = enriched.filter(pl.col("contract_id").is_not_null()).unique(subset=["contract_id"], keep="last")
     return enriched
 
 
 def _check_freshness(increment: pl.DataFrame, expected: date | None) -> None:
     if expected is None:
         return
-    newest = increment.select(
-        pl.col("contract_registration_date").str.to_datetime(strict=False).max()
-    ).item()
+    newest = increment.select(pl.col("contract_registration_date").str.to_datetime(strict=False).max()).item()
     if newest is None:
         return
     lag = (expected - newest.date()).days
@@ -257,9 +252,7 @@ def ingest_layers(
     finally:
         con.close()
 
-    logger.info(
-        f"Ingested {increment.height} rows ({ingested_window}) into {db} — {total} contracts total"
-    )
+    logger.info(f"Ingested {increment.height} rows ({ingested_window}) into {db} — {total} contracts total")
     return str(db)
 
 

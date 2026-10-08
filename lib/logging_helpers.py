@@ -1,4 +1,5 @@
 """Configure logging for the READ package."""
+
 import logging
 
 import coloredlogs

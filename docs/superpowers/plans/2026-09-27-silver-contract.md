@@ -222,6 +222,7 @@ is preserved.
 Units: ACTUAL_AREA is square FEET, confirmed by residential flats in the
 400-1200 band landing at ~80.6 AED/sqft. Never name an area field *_sqm.
 """
+
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -424,9 +425,7 @@ def test_rent_per_sqft_lands_in_the_dubai_market_band():
     10x market. Moved here from Task 2, where rent_per_sqft did not yet exist."""
     from lib.classes.silver_contract import SilverRentContract
 
-    c = SilverRentContract(
-        **_row(annual_amount=Decimal("60000"), actual_area=Decimal("744"))
-    )
+    c = SilverRentContract(**_row(annual_amount=Decimal("60000"), actual_area=Decimal("744")))
     assert c.psf_eligible is True
     assert Decimal("60") <= c.rent_per_sqft <= Decimal("120"), (
         f"rent_per_sqft {c.rent_per_sqft} outside 60-120; the unit is not sqft"
@@ -777,9 +776,7 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
     frame = pl.DataFrame(records, infer_schema_length=None) if records else df.clear()
     return SilverContractResult(
         frame=frame,
-        quarantined=pl.DataFrame(failed, infer_schema_length=None)
-        if failed
-        else df.clear(),
+        quarantined=pl.DataFrame(failed, infer_schema_length=None) if failed else df.clear(),
         groups=pl.DataFrame(),
         violation_counts=violations,
     )
@@ -1090,19 +1087,13 @@ def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
         if observed > declared:
             # the key merged two distinct contracts: irreducibly ambiguous
             # without a contract number
-            violations["merged_contract_group"] = violations.get(
-                "merged_contract_group", 0
-            ) + observed
+            violations["merged_contract_group"] = violations.get("merged_contract_group", 0) + observed
         elif observed < declared:
             # the window captured only part of the contract
-            violations["partial_contract_capture"] = violations.get(
-                "partial_contract_capture", 0
-            ) + observed
+            violations["partial_contract_capture"] = violations.get("partial_contract_capture", 0) + observed
         rows.append(
             {
-                "group_id": hashlib.sha256(
-                    "|".join(str(k) for k in key).encode("utf-8")
-                ).hexdigest()[:32],
+                "group_id": hashlib.sha256("|".join(str(k) for k in key).encode("utf-8")).hexdigest()[:32],
                 "start_date": key[0],
                 "end_date": key[1],
                 # CONTRACT-LEVEL, repeated per member row. Deduplicated, never
@@ -1115,9 +1106,7 @@ def _rollup(frame: pl.DataFrame, violations: dict[str, int]) -> pl.DataFrame:
                 "total_area_sqft": block["actual_area"].sum(),
                 "record_ids": block["record_id"].to_list(),
                 # a set of categories, not one entry per property row
-                "usages": sorted(
-                    {u for u in block["property_usage_en"].to_list() if u is not None}
-                ),
+                "usages": sorted({u for u in block["property_usage_en"].to_list() if u is not None}),
                 "is_complete": observed == declared,
             }
         )
@@ -1186,35 +1175,37 @@ of AED 3,053,700. Partial captures and merged groups are flagged, not dropped."
 Append to `tests/test_etl_pipeline.py`, inside `class TestETLPipelineIntegration`:
 
 ```python
-    def test_transform_rents_runs_the_silver_contract(self, tmp_path):
-        """transform_rents must run to_silver and rewrite the parquet.
+def test_transform_rents_runs_the_silver_contract(self, tmp_path):
+    """transform_rents must run to_silver and rewrite the parquet.
 
-        RentsTransformer is stubbed to do a real CSV -> parquet write, so
-        read_parquet and write_parquet are NOT patched. Asserting on a patched
-        DataFrame.write_parquet would only see the path string, not the frame.
-        """
-        import polars as pl
-        from unittest.mock import patch
-        import run_etl_pipeline
-        from lib.transform.rents_transformer import RentsTransformer
+    RentsTransformer is stubbed to do a real CSV -> parquet write, so
+    read_parquet and write_parquet are NOT patched. Asserting on a patched
+    DataFrame.write_parquet would only see the path string, not the frame.
+    """
+    import polars as pl
+    from unittest.mock import patch
+    import run_etl_pipeline
+    from lib.transform.rents_transformer import RentsTransformer
 
-        csv = tmp_path / "rent_contracts_20260917.csv"
-        parquet = tmp_path / "rent_contracts_20260917.parquet"
-        pl.read_csv(
-            'output/rent_contracts_20260917.csv', n_rows=50, null_values=[''],
-            ignore_errors=True,
-            schema_overrides={'ANNUAL_AMOUNT': pl.Float64, 'ACTUAL_AREA': pl.Float64},
-        ).write_csv(csv)
+    csv = tmp_path / "rent_contracts_20260917.csv"
+    parquet = tmp_path / "rent_contracts_20260917.parquet"
+    pl.read_csv(
+        "output/rent_contracts_20260917.csv",
+        n_rows=50,
+        null_values=[""],
+        ignore_errors=True,
+        schema_overrides={"ANNUAL_AMOUNT": pl.Float64, "ACTUAL_AREA": pl.Float64},
+    ).write_csv(csv)
 
-        ok = run_etl_pipeline.transform_rents(str(csv), str(parquet))
-        assert ok is True
+    ok = run_etl_pipeline.transform_rents(str(csv), str(parquet))
+    assert ok is True
 
-        # spec gate 8: the written frame keeps 1 row per input row (ADR-02)
-        assert parquet.exists(), "transform_rents must rewrite the parquet in place"
-        written = pl.read_parquet(parquet)
-        assert written.height == 50
-        assert written['record_id'].n_unique() == 50
-        assert 'violations' in written.columns
+    # spec gate 8: the written frame keeps 1 row per input row (ADR-02)
+    assert parquet.exists(), "transform_rents must rewrite the parquet in place"
+    written = pl.read_parquet(parquet)
+    assert written.height == 50
+    assert written["record_id"].n_unique() == 50
+    assert "violations" in written.columns
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1242,14 +1233,10 @@ def transform_rents(input_csv: str, output_parquet: str) -> bool:
         result = to_silver(pl.read_parquet(output_parquet))
         logger.info(f"Silver contract: {len(result)} rows validated")
         if result.violation_counts:
-            top = sorted(
-                result.violation_counts.items(), key=lambda kv: -kv[1]
-            )[:5]
+            top = sorted(result.violation_counts.items(), key=lambda kv: -kv[1])[:5]
             logger.info(f"Silver violations: {top}")
 
-        result.frame.write_parquet(
-            output_parquet, compression="zstd", compression_level=3
-        )
+        result.frame.write_parquet(output_parquet, compression="zstd", compression_level=3)
         logger.info(f"Silver frame written: {output_parquet}")
         return True
     except Exception as e:
@@ -1415,16 +1402,20 @@ def test_property_usage_psf_respects_the_200_sqft_floor():
     from pathlib import Path
     from lib.classes.property_usage import PropertyUsage
 
-    df = pl.DataFrame({
-        "property_usage_en": ["Residential", "Residential", "Residential"],
-        "annual_amount": [100000.0, 200000.0, 300000.0],
-        "actual_area": [1.0, 15.9, 1000.0],
-        "price_per_sqft": [None, None, 300.0],
-        "no_of_contracts": [1, 1, 1],
-    })
-    enriched = enrich_rent_contracts(df.with_columns(
-        pl.col("price_per_sqft").alias("_drop_me")
-    ).select([c for c in df.columns if c != "price_per_sqft"]))
+    df = pl.DataFrame(
+        {
+            "property_usage_en": ["Residential", "Residential", "Residential"],
+            "annual_amount": [100000.0, 200000.0, 300000.0],
+            "actual_area": [1.0, 15.9, 1000.0],
+            "price_per_sqft": [None, None, 300.0],
+            "no_of_contracts": [1, 1, 1],
+        }
+    )
+    enriched = enrich_rent_contracts(
+        df.with_columns(pl.col("price_per_sqft").alias("_drop_me")).select(
+            [c for c in df.columns if c != "price_per_sqft"]
+        )
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "in.parquet"
@@ -1446,21 +1437,24 @@ Expected: FAIL — avg_psf computed from unfiltered `actual_area` exceeds 500
 In `lib/classes/property_usage.py`, replace the PSF block (lines 88–101) with:
 
 ```python
-            # PSF comes from the enriched column, which is null below
-            # VALIDATION_THRESHOLDS min_property_size (200 sqft). Recomputing
-            # it here from actual_area bypasses that guard.
-            if "price_per_sqft" in lf.collect_schema().names():
-                psf_stats = lf.filter(
-                    (pl.col("property_usage_en").is_not_null()) &
-                    (pl.col("price_per_sqft").is_not_null())
-                ).with_columns(
-                    pl.col("price_per_sqft").cast(pl.Float64).alias("psf")
-                ).group_by("property_usage_en").agg([
-                    pl.col("psf").mean().alias("avg_psf"),
-                    pl.col("psf").median().alias("median_psf"),
-                ]).collect()
-            else:
-                psf_stats = None
+# PSF comes from the enriched column, which is null below
+# VALIDATION_THRESHOLDS min_property_size (200 sqft). Recomputing
+# it here from actual_area bypasses that guard.
+if "price_per_sqft" in lf.collect_schema().names():
+    psf_stats = (
+        lf.filter((pl.col("property_usage_en").is_not_null()) & (pl.col("price_per_sqft").is_not_null()))
+        .with_columns(pl.col("price_per_sqft").cast(pl.Float64).alias("psf"))
+        .group_by("property_usage_en")
+        .agg(
+            [
+                pl.col("psf").mean().alias("avg_psf"),
+                pl.col("psf").median().alias("median_psf"),
+            ]
+        )
+        .collect()
+    )
+else:
+    psf_stats = None
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
@@ -1613,6 +1607,7 @@ Create `lib/analysis/gold_indexes.py`:
 HOTEL_AND_MASS_LANDLORD_SUBTYPES are never market comparables, and
 is_bulk_registration marks DLD bulk filings that skew means by 8x.
 """
+
 import polars as pl
 
 EXCLUDED_SUBTYPES = ["Hotel", "Labor Camps", "Virtual Unit"]

@@ -4,6 +4,7 @@ The combined store holds the Silver tables and the Gold views in one file, so a 
 `ATTACH` and no alias bookkeeping — a plain connection resolves every view. Kept as a helper so
 consumers and tests open it the same (read-only by default) way.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

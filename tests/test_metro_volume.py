@@ -3,6 +3,7 @@
 The view lives in the combined layers DuckDB next to the Silver tables, so the fixture builds a
 minimal combined file and the query needs no attach.
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -19,10 +20,7 @@ from lib.analysis.metro_volume import (
 
 
 def _seed_layers(con: duckdb.DuckDBPyConnection) -> None:
-    con.execute(
-        "CREATE TABLE FctContract (rn INTEGER, nearest_metro_en VARCHAR, "
-        "contract_registration_date TIMESTAMP)"
-    )
+    con.execute("CREATE TABLE FctContract (rn INTEGER, nearest_metro_en VARCHAR, contract_registration_date TIMESTAMP)")
     con.execute("CREATE TABLE DimMetro (nearest_metro_en VARCHAR)")
     # Day 1: A=3, B=2, C=1 (no 3rd-place tie); null metro ignored
     # Day 2: X=4, Y=2, Z=1
@@ -37,8 +35,7 @@ def _seed_layers(con: duckdb.DuckDBPyConnection) -> None:
     )
     con.executemany("INSERT INTO FctContract VALUES (?, ?, ?)", fact_rows)
     con.execute(
-        "INSERT INTO DimMetro SELECT DISTINCT nearest_metro_en FROM FctContract "
-        "WHERE nearest_metro_en IS NOT NULL"
+        "INSERT INTO DimMetro SELECT DISTINCT nearest_metro_en FROM FctContract WHERE nearest_metro_en IS NOT NULL"
     )
     con.execute("CREATE TABLE _meta AS SELECT DATE '2026-09-16' AS data_through")
     con.execute(GOLD_TOP_METROS_DAILY_SQL)

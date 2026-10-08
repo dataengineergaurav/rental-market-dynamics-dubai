@@ -17,7 +17,7 @@ from lib.config import (
     is_residential,
     is_commercial,
     VALIDATION_THRESHOLDS,
-    AREA_CLASSIFICATIONS
+    AREA_CLASSIFICATIONS,
 )
 
 # Get area tier
@@ -73,17 +73,19 @@ from lib.classes.silver_contract import to_silver
 df = pl.read_parquet("rent_contracts.parquet")
 result = to_silver(df)
 
-result.frame          # every row that constructed, with derived fields + violations
-result.quarantined    # raw source rows pydantic could not build (auditable, not dropped)
-result.groups         # reconstructed multi-property contract blocks
+result.frame  # every row that constructed, with derived fields + violations
+result.quarantined  # raw source rows pydantic could not build (auditable, not dropped)
+result.groups  # reconstructed multi-property contract blocks
 result.violation_counts
 # {'actual_area_below_psf_floor': 3860, 'amount_duration_mismatch': 85,
 #  'annual_amount_below_min': 9, 'annual_amount_above_max': 1, ...}
 
 # which rows, not just how many
-(result.frame
-    .filter(pl.col("violations").list.len() > 0)
-    .select("record_id", "area_name_en", "annual_amount", "actual_area", "violations"))
+(
+    result.frame.filter(pl.col("violations").list.len() > 0).select(
+        "record_id", "area_name_en", "annual_amount", "actual_area", "violations"
+    )
+)
 ```
 
 Derived fields it adds: `duration_days`, `is_short_term`, `monthly_rent`, `rent_per_sqft` (null
@@ -180,7 +182,7 @@ analyzer.transform("rent_contracts.parquet")
 analyzer.compare_periods(
     current_file="rent_contracts_2024.parquet",
     previous_file="rent_contracts_2023.parquet",
-    output_comparison="yoy_comparison.csv"
+    output_comparison="yoy_comparison.csv",
 )
 ```
 

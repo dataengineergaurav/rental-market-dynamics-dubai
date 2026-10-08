@@ -154,6 +154,7 @@ def test_output_schema_and_sort_order_are_stable():
     assert out.columns == PUBLISHED_COLUMNS
     assert out["area_name_en"].to_list() == ["Zabeel", "Al Satwa"]
 
+
 PUBLISHED_COLUMNS = [
     "area_name_en",
     "n",
@@ -234,19 +235,11 @@ def test_bounds_are_never_inlined_in_the_consumer():
         ]
         assert not literals, f"{name} is bound to a bare literal, not read from its owner"
 
-        comparisons = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Compare) and name in _names_in(node)
-        ]
+        comparisons = [node for node in ast.walk(tree) if isinstance(node, ast.Compare) and name in _names_in(node)]
         assert comparisons, f"{name} is no longer load-bearing — check the filter chain"
         for node in comparisons:
             operands = [node.left, *node.comparators]
-            bare = [
-                o.value
-                for o in operands
-                if isinstance(o, ast.Constant) and isinstance(o.value, (int, float))
-            ]
+            bare = [o.value for o in operands if isinstance(o, ast.Constant) and isinstance(o.value, (int, float))]
             assert not bare, f"{name} is compared against a bare literal {bare}"
 
 
@@ -315,9 +308,8 @@ def test_whole_asset_lease_does_not_fail_the_market_health_gate():
     assertion below is what proves the lease reached the index rather than being
     filtered away — without it this test would pass on an empty frame.
     """
-    rows = (
-        _spread(40, "Palm Jumeirah", 200_000.0, "Flat")
-        + _rows(1, "Palm Jumeirah", 12_610_000.0, "Flat", area_sqft=90_000.0)
+    rows = _spread(40, "Palm Jumeirah", 200_000.0, "Flat") + _rows(
+        1, "Palm Jumeirah", 12_610_000.0, "Flat", area_sqft=90_000.0
     )
     out = build_residential_market_index(pl.DataFrame(rows))
     assert out.height == 1
@@ -331,17 +323,13 @@ def test_residential_median_band_is_green_and_has_teeth():
     band nothing can fail is not a gate. Measured spread across the 103
     residential areas in the pooled artifact is 28,000-280,000, so a residential
     area publishing 700,000 is a unit error, not a market."""
-    ok = build_residential_market_index(
-        pl.DataFrame(_spread(40, "Jumeirah Second", 228_750.0, "Flat"))
-    )
+    ok = build_residential_market_index(pl.DataFrame(_spread(40, "Jumeirah Second", 228_750.0, "Flat")))
     assert _gate_failures(ok).height == 0
     # 228,750 + 19.5 steps of 100 — _spread varies the amount, so the first row
     # is not the median.
     assert ok["median_rent"][0] == 230_700.0
 
-    broken = build_residential_market_index(
-        pl.DataFrame(_spread(40, "Jumeirah Second", 700_000.0, "Flat"))
-    )
+    broken = build_residential_market_index(pl.DataFrame(_spread(40, "Jumeirah Second", 700_000.0, "Flat")))
     assert _gate_failures(broken)["area_name_en"].to_list() == ["Jumeirah Second"]
 
 
@@ -367,9 +355,7 @@ def test_residential_restriction_is_what_makes_the_gate_green():
     Palm Jumeirah is in scope and it passes. Drop the residential filter from
     build_residential_market_index and this test goes red.
     """
-    rows = _spread(
-        19, "Al Goze Industrial First", 590_000.0, "Warehouse", usage="Industrial"
-    ) + _rows(
+    rows = _spread(19, "Al Goze Industrial First", 590_000.0, "Warehouse", usage="Industrial") + _rows(
         1, "Al Goze Industrial First", 4_300_000.0, "Warehouse", usage="Industrial"
     )
     all_stock = build_area_median_index(pl.DataFrame(rows))
@@ -389,9 +375,6 @@ def test_residential_index_keeps_the_n_floor_and_its_schema():
     assert out["n"][0] == 40
     assert out.schema == GATE_SCHEMA
 
-    below_floor = build_residential_market_index(
-        pl.DataFrame(_spread(9, "Al Satwa", 55_000.0, "Flat"))
-    )
+    below_floor = build_residential_market_index(pl.DataFrame(_spread(9, "Al Satwa", 55_000.0, "Flat")))
     assert below_floor.height == 0
     assert below_floor.schema == GATE_SCHEMA
-

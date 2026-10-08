@@ -25,6 +25,7 @@ shipped artifact applies; see task-10-report.md. Not applied here on purpose.
 published index: `build_area_median_index` stays on all stock because that is
 what the shipped artifact and its consumers read. See the GATE_* block below.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -144,4 +145,3 @@ def build_residential_market_index(df: pl.DataFrame) -> pl.DataFrame:
         .filter(pl.col("n") >= MIN_AREA_ROWS)
         .sort("median_rent")
     )
-

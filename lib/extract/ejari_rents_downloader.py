@@ -2,6 +2,7 @@
 Ejari rents downloader — POSTs the configured EJARI_URL endpoint
 (Rent Transaction Details). Params: P_DATE_TYPE, P_VERSION, P_IS_FREE_HOLD etc.
 """
+
 from __future__ import annotations
 
 import csv
@@ -17,6 +18,7 @@ from lib.config import API_CONFIG
 
 logger = logging.getLogger(__name__)
 
+
 class EjariRentsDownloader:
     """Paginated rents fetcher: POST EJARI_URL -> CSV/JSON."""
 
@@ -28,7 +30,9 @@ class EjariRentsDownloader:
         self.max_retries = API_CONFIG["max_retries"]
         self.backoff_factor = API_CONFIG["retry_backoff_factor"]
 
-    def _body(self, take: int, skip: int, from_date: str = "01/01/2020", to_date: str | None = None, date_type: str = "0") -> dict:
+    def _body(
+        self, take: int, skip: int, from_date: str = "01/01/2020", to_date: str | None = None, date_type: str = "0"
+    ) -> dict:
         if to_date is None:
             now = datetime.now(timezone.utc)
             to_date = f"{now.month:02d}/{now.day:02d}/{now.year}"
@@ -59,15 +63,17 @@ class EjariRentsDownloader:
                     resp.raise_for_status()
                     payload = resp.json()
                     if payload.get("responseCode") != 200:
-                        raise RuntimeError(f"Gateway {payload.get('responseCode')}: {payload.get('validationErrorsList')}")
+                        raise RuntimeError(
+                            f"Gateway {payload.get('responseCode')}: {payload.get('validationErrorsList')}"
+                        )
                     rows = payload.get("response", {}).get("result", []) or []
                     break
                 except Exception as e:
                     if attempt == self.max_retries - 1:
                         logger.error(f"Rents download failed: {e}")
                         return False
-                    wait = self.backoff_factor ** attempt
-                    logger.warning(f"Rents retry {attempt+1}/{self.max_retries}: {e} (wait {wait}s)")
+                    wait = self.backoff_factor**attempt
+                    logger.warning(f"Rents retry {attempt + 1}/{self.max_retries}: {e} (wait {wait}s)")
                     time.sleep(wait)
             if not rows:
                 break
