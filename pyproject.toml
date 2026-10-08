@@ -14,7 +14,7 @@ dependencies = [
     "coloredlogs",
     "cmake",
     "setuptools",
-    "polars",
+    "polars>=1.0,<2",
     "pytest",
     "jupyter",
     "requests-mock",
@@ -25,9 +25,21 @@ dependencies = [
     "pydantic>=2",
 ]
 
+[dependency-groups]
+dev = ["ruff", "pytest-cov"]
+
 [tool.setuptools.packages.find]
 include = ["lib*"]
 exclude = ["output*"]
 
 [tool.uv.sources]
 lib = { path = "./lib", editable = true }
+
+[tool.ruff]
+line-length = 120
+exclude = ["output", "rents_scraper", ".venv", "build"]
+
+[tool.ruff.lint]
+# High-signal only: undefined names / unused imports (F) and syntax errors (E9),
+# plus real-bug lints (B). Not a style gate.
+select = ["F", "E9", "B"]

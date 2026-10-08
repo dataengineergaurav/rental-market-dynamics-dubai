@@ -30,3 +30,14 @@ jobs:
         run: |
           make build
           make test
+
+      # Quality gate: lint + coverage. Lint (ruff) catches undefined names, unused imports and
+      # real-bug lints; coverage is a ratchet (see Makefile COVERAGE_FLOOR).
+      - name: Install dev tools
+        run: pip install -q -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: make lint
+
+      - name: Coverage gate
+        run: make coverage

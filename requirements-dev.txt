@@ -1,0 +1,4 @@
+# Dev-only tooling for the CI quality gate. Runtime dependencies live in requirements.txt.
+# Used by `make lint` (ruff) and `make coverage` (pytest-cov); see .github/workflows/build_and_deploy.yml.
+ruff
+pytest-cov

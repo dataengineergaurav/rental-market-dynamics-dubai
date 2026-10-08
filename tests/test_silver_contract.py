@@ -64,10 +64,16 @@ def test_field_on_a_leading_underscore_name_is_an_error():
     """The form that broke BronzeRentContract was Field(default_factory=...);
     a plain Field(default=...) raises identically. Both are the loud form. A
     bare default or a bare annotation is accepted silently as a private
-    attribute, which is why only the Field() form raised."""
-    from pydantic import BaseModel, Field
+    attribute, which is why only the Field() form raised.
 
-    with pytest.raises(NameError, match="leading underscores"):
+    The exception TYPE is pydantic-version dependent and is not the contract:
+    older pydantic raised NameError, >=2.13 raises PydanticUserError. What is
+    pinned is that the Field() form on a leading-underscore name fails LOUDLY
+    (rather than becoming a silent private attribute), with the same message.
+    """
+    from pydantic import BaseModel, Field, PydanticUserError
+
+    with pytest.raises((NameError, PydanticUserError), match="leading underscores"):
 
         class Bad(BaseModel):
             _private: str = Field(default="x")
@@ -90,10 +96,17 @@ def test_all_canonical_names_are_declared():
     from lib.classes.silver_contract import SilverRentContract
 
     for name in (
-        "area_name_en", "annual_amount", "actual_area", "contract_start_date",
-        "property_usage_en", "project_name_en", "master_project_en",
-        "ejari_property_type_en", "ejari_property_sub_type_en",
-        "contract_registration_date", "contract_amount",
+        "area_name_en",
+        "annual_amount",
+        "actual_area",
+        "contract_start_date",
+        "property_usage_en",
+        "project_name_en",
+        "master_project_en",
+        "ejari_property_type_en",
+        "ejari_property_sub_type_en",
+        "contract_registration_date",
+        "contract_amount",
     ):
         assert name in SilverRentContract.model_fields, name
 
@@ -180,9 +193,7 @@ def test_rent_per_sqft_lands_in_the_dubai_market_band():
     10x market. Moved here from Task 2, where rent_per_sqft did not yet exist."""
     from lib.classes.silver_contract import SilverRentContract
 
-    c = SilverRentContract(
-        **_row(annual_amount=Decimal("60000"), actual_area=Decimal("744"))
-    )
+    c = SilverRentContract(**_row(annual_amount=Decimal("60000"), actual_area=Decimal("744")))
     assert c.psf_eligible is True
     assert Decimal("60") <= c.rent_per_sqft <= Decimal("120"), (
         f"rent_per_sqft {c.rent_per_sqft} outside 60-120; the unit is not sqft"
@@ -246,7 +257,6 @@ def test_to_silver_never_raises_on_garbage():
 
 
 def test_to_silver_nulls_masked_arabic_cells():
-    import polars as pl
     from lib.classes.silver_contract import to_silver
 
     df = _frame(1, nearest_metro_ar="??", area_name_ar="برج خليفة")
@@ -259,7 +269,6 @@ def test_to_silver_nulls_masked_arabic_cells():
 def test_rent_below_zero_is_a_violation_not_an_error():
     """Per-row rent checks moved off validators.py; this asserts the coverage
     did not disappear with them."""
-    import polars as pl
     from lib.classes.silver_contract import to_silver
 
     res = to_silver(_frame(1, annual_amount=Decimal("-1")))
@@ -287,12 +296,14 @@ def test_unrecoverable_arabic_columns_are_documented_not_repaired():
             f"{col} is declared as a field but documented as unrecoverable"
         )
 
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina"],
-        "annual_amount": [90000.0],
-        "actual_area": [900.0],
-        "VERSION_AR": ["?????"],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina"],
+            "annual_amount": [90000.0],
+            "actual_area": [900.0],
+            "VERSION_AR": ["?????"],
+        }
+    )
     res = to_silver(df)
     assert "VERSION_AR" not in res.frame.columns
     assert len(res.frame) + len(res.quarantined) == df.height
@@ -312,14 +323,16 @@ def test_late_non_null_value_does_not_break_frame_construction():
     import polars as pl
     from lib.classes.silver_contract import to_silver
 
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina"] * 101,
-        "master_project_en": [None] * 100 + ["Hills Park"],
-        "ejari_property_sub_type_en": ["Flat"] * 101,
-        "contract_start_date": [date(2026, 9, 20)] * 101,
-        "annual_amount": [90000.0] * 101,
-        "actual_area": [900.0] * 101,
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina"] * 101,
+            "master_project_en": [None] * 100 + ["Hills Park"],
+            "ejari_property_sub_type_en": ["Flat"] * 101,
+            "contract_start_date": [date(2026, 9, 20)] * 101,
+            "annual_amount": [90000.0] * 101,
+            "actual_area": [900.0] * 101,
+        }
+    )
     res = to_silver(df)
     assert len(res.frame) + len(res.quarantined) == df.height
     assert len(res.frame) == 101, "every row is valid; none may be quarantined"
@@ -333,11 +346,13 @@ def test_no_row_is_ever_discarded():
     import polars as pl
     from lib.classes.silver_contract import to_silver
 
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina", None, "Business Bay"],
-        "annual_amount": [90000.0, 90000.0, 90000.0],
-        "actual_area": [900.0, 900.0, -1.0],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina", None, "Business Bay"],
+            "annual_amount": [90000.0, 90000.0, 90000.0],
+            "actual_area": [900.0, 900.0, -1.0],
+        }
+    )
     res = to_silver(df)
     assert len(res.frame) + len(res.quarantined) == df.height
 
@@ -384,13 +399,15 @@ def test_row_hash_normalises_whitespace_before_hashing():
     import polars as pl
     from lib.classes.silver_contract import to_silver
 
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina", "  Dubai Marina  "],
-        "ejari_property_sub_type_en": ["Flat", "Flat"],
-        "contract_start_date": [date(2026, 9, 20)] * 2,
-        "annual_amount": [90000.0, 90000.0],
-        "actual_area": [900.0, 900.0],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina", "  Dubai Marina  "],
+            "ejari_property_sub_type_en": ["Flat", "Flat"],
+            "contract_start_date": [date(2026, 9, 20)] * 2,
+            "annual_amount": [90000.0, 90000.0],
+            "actual_area": [900.0, 900.0],
+        }
+    )
     res = to_silver(df)
     assert res.frame["row_hash"][0] == res.frame["row_hash"][1]
     # the model normalises both to the same area too
@@ -427,15 +444,9 @@ def test_row_hash_is_agnostic_to_numeric_type():
         "contract_start_date": "2026-09-20",
         "actual_area": 900,
     }
-    assert _row_hash({**base, "annual_amount": 225000.0}) == _row_hash(
-        {**base, "annual_amount": Decimal("225000")}
-    )
-    assert _row_hash({**base, "annual_amount": 225000.0}) == _row_hash(
-        {**base, "annual_amount": 225000}
-    )
-    assert _row_hash({**base, "actual_area": 20.03}) == _row_hash(
-        {**base, "actual_area": Decimal("20.03")}
-    )
+    assert _row_hash({**base, "annual_amount": 225000.0}) == _row_hash({**base, "annual_amount": Decimal("225000")})
+    assert _row_hash({**base, "annual_amount": 225000.0}) == _row_hash({**base, "annual_amount": 225000})
+    assert _row_hash({**base, "actual_area": 20.03}) == _row_hash({**base, "actual_area": Decimal("20.03")})
 
 
 def test_frame_carries_the_full_model_schema():
@@ -445,11 +456,13 @@ def test_frame_carries_the_full_model_schema():
     import polars as pl
     from lib.classes.silver_contract import SilverRentContract, to_silver
 
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina"],
-        "annual_amount": [90000.0],
-        "actual_area": [900.0],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina"],
+            "annual_amount": [90000.0],
+            "actual_area": [900.0],
+        }
+    )
     frame = to_silver(df).frame
     assert set(frame.columns) == set(SilverRentContract.model_fields)
     assert frame.width == len(SilverRentContract.model_fields)
@@ -670,8 +683,7 @@ def test_to_silver_is_idempotent_on_its_own_output(tmp_path):
 
     second = to_silver(pl.read_parquet(src))
     assert second.violation_counts == first.violation_counts, (
-        f"re-validation changed the counts: {first.violation_counts} -> "
-        f"{second.violation_counts}"
+        f"re-validation changed the counts: {first.violation_counts} -> {second.violation_counts}"
     )
     assert second.frame["violations"].to_list() == first.frame["violations"].to_list(), (
         "the per-row column must be unchanged, not just the tallies"
@@ -690,12 +702,14 @@ def test_parking_source_column_is_cast_to_has_parking():
     import polars as pl
     from lib.classes.silver_contract import to_silver
 
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina"] * 3,
-        "annual_amount": [90000.0] * 3,
-        "actual_area": [900.0] * 3,
-        "PARKING": [1, None, 0],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina"] * 3,
+            "annual_amount": [90000.0] * 3,
+            "actual_area": [900.0] * 3,
+            "PARKING": [1, None, 0],
+        }
+    )
     res = to_silver(df)
     assert len(res.quarantined) == 0, "the null PARKING row must not be quarantined"
     assert res.frame["has_parking"].to_list() == [True, False, False]
@@ -727,14 +741,18 @@ def test_no_dropped_column_is_actually_carried_in_every_frame():
             "every frame — remove the entry or stop carrying the column"
         )
 
-    frame = to_silver(pl.DataFrame({
-        "area_name_en": ["Dubai Marina"],
-        "annual_amount": [90000.0],
-        "actual_area": [900.0],
-        # canonical name: RentsTransformer aliases MASTER_PROJECT_EN to this, and
-        # only 13 columns are aliased, so a raw UPPERCASE frame would test the
-        # alias layer rather than whether the column is carried.
-        "master_project_en": ["Hills Park"],
-    })).frame
+    frame = to_silver(
+        pl.DataFrame(
+            {
+                "area_name_en": ["Dubai Marina"],
+                "annual_amount": [90000.0],
+                "actual_area": [900.0],
+                # canonical name: RentsTransformer aliases MASTER_PROJECT_EN to this, and
+                # only 13 columns are aliased, so a raw UPPERCASE frame would test the
+                # alias layer rather than whether the column is carried.
+                "master_project_en": ["Hills Park"],
+            }
+        )
+    ).frame
     assert "master_project_en" in frame.columns, "it is carried, which is the point"
     assert frame["master_project_en"][0] == "Hills Park"
