@@ -6,7 +6,6 @@ and temporal features to enable better analysis.
 """
 
 import logging
-from datetime import datetime
 import polars as pl
 
 from lib.config import (
@@ -14,6 +13,7 @@ from lib.config import (
     AreaTier,
     MARKET_METRICS,
     PROPERTY_TYPE_MAPPINGS,
+    psf_expression,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ BULK_GROUP_MAX = 10
 class RentContractsEnricher:
     """
     Enriches rent contract data with calculated fields and classifications.
-    
+
     Features:
     - Price per square foot calculation
     - Area tier classification
@@ -36,45 +36,45 @@ class RentContractsEnricher:
     - Contract duration calculation
     - Luxury property flagging
     """
-    
+
     def __init__(self, data: pl.DataFrame):
         """
         Initialize enricher.
-        
+
         Args:
             data: DataFrame containing rent contract data
         """
         self.data = data
-        
+
     def enrich(self) -> pl.DataFrame:
         """
         Apply all enrichment transformations.
-        
+
         Returns:
             Enriched DataFrame
         """
         logger.info("Starting data enrichment...")
-        
+
         enriched = self.data
-        
+
         # Calculate PSF
         enriched = self._add_psf(enriched)
-        
+
         # Add area tier classification
         enriched = self._add_area_tier(enriched)
-        
+
         # Normalize property types
         enriched = self._normalize_property_types(enriched)
-        
+
         # Add temporal features
         enriched = self._add_temporal_features(enriched)
-        
+
         # Calculate contract duration
         enriched = self._add_contract_duration(enriched)
-        
+
         # Flag luxury properties
         enriched = self._flag_luxury_properties(enriched)
-        
+
         # Add usage category
         enriched = self._add_usage_category(enriched)
 
@@ -84,24 +84,14 @@ class RentContractsEnricher:
         logger.info(f"Enrichment complete. Added {len(enriched.columns) - len(self.data.columns)} new columns")
 
         return enriched
-        
+
     def _add_psf(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Add price per square foot — null if area <200 (unusable)."""
+        """Add price per square foot via the shared guard — null below PSF_MIN_AREA_SQFT."""
         if "actual_area" in df.columns and "annual_amount" in df.columns:
             logger.debug("Adding PSF calculation...")
-            df = df.with_columns(
-                pl.when(
-                    (pl.col("actual_area").is_not_null()) &
-                    (pl.col("actual_area") >= 200) &
-                    (pl.col("annual_amount").is_not_null()) &
-                    (pl.col("annual_amount") > 0)
-                )
-                .then(pl.col("annual_amount") / pl.col("actual_area"))
-                .otherwise(None)
-                .alias("price_per_sqft")
-            )
+            df = df.with_columns(psf_expression().alias("price_per_sqft"))
         return df
-        
+
     def _add_area_tier(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add area tier classification via AREA_CLASSIFICATIONS."""
         if "area_name_en" in df.columns:
@@ -111,7 +101,7 @@ class RentContractsEnricher:
                 pl.col("area_name_en").replace_strict(tier_map, default=AreaTier.MID_TIER.value).alias("area_tier")
             )
         return df
-        
+
     def _normalize_property_types(self, df: pl.DataFrame) -> pl.DataFrame:
         """Normalize property type names via PROPERTY_TYPE_MAPPINGS."""
         if "ejari_property_type_en" in df.columns:
@@ -125,26 +115,34 @@ class RentContractsEnricher:
                 .alias("property_type_normalized")
             )
         return df
-        
+
     def _add_temporal_features(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add temporal features from contract start date."""
         if "contract_start_date" in df.columns and df["contract_start_date"].dtype != pl.Null:
             # skip if dtype is not temporal (e.g. all-null test fixture)
-            if df["contract_start_date"].dtype not in (pl.Date, pl.Datetime, pl.Datetime("ns"), pl.Datetime("ms"), pl.Datetime("us")):
+            if df["contract_start_date"].dtype not in (
+                pl.Date,
+                pl.Datetime,
+                pl.Datetime("ns"),
+                pl.Datetime("ms"),
+                pl.Datetime("us"),
+            ):
                 # try to parse, if still not temporal skip
                 if df["contract_start_date"].null_count() == df.height:
                     return df
             logger.debug("Adding temporal features...")
             try:
-                df = df.with_columns([
-                    pl.col("contract_start_date").dt.year().alias("contract_year"),
-                    pl.col("contract_start_date").dt.quarter().alias("contract_quarter"),
-                    pl.col("contract_start_date").dt.month().alias("contract_month"),
-                    pl.col("contract_start_date").dt.weekday().alias("contract_weekday"),
-                ])
+                df = df.with_columns(
+                    [
+                        pl.col("contract_start_date").dt.year().alias("contract_year"),
+                        pl.col("contract_start_date").dt.quarter().alias("contract_quarter"),
+                        pl.col("contract_start_date").dt.month().alias("contract_month"),
+                        pl.col("contract_start_date").dt.weekday().alias("contract_weekday"),
+                    ]
+                )
             except Exception:
                 return df
-            
+
             # Add season
             df = df.with_columns(
                 pl.when(pl.col("contract_month").is_in([12, 1, 2]))
@@ -156,24 +154,21 @@ class RentContractsEnricher:
                 .otherwise(pl.lit("Fall"))
                 .alias("contract_season")
             )
-        
+
         return df
-        
+
     def _add_contract_duration(self, df: pl.DataFrame) -> pl.DataFrame:
         """Calculate contract duration in days."""
         if "contract_start_date" in df.columns and "contract_end_date" in df.columns:
             logger.debug("Calculating contract duration...")
-            
+
             df = df.with_columns(
-                pl.when(
-                    (pl.col("contract_start_date").is_not_null()) &
-                    (pl.col("contract_end_date").is_not_null())
-                )
+                pl.when((pl.col("contract_start_date").is_not_null()) & (pl.col("contract_end_date").is_not_null()))
                 .then((pl.col("contract_end_date") - pl.col("contract_start_date")).dt.total_days())
                 .otherwise(None)
                 .alias("contract_duration_days")
             )
-            
+
             # Add duration category
             df = df.with_columns(
                 pl.when(pl.col("contract_duration_days") < 180)
@@ -185,47 +180,37 @@ class RentContractsEnricher:
                 .otherwise(pl.lit("Unknown"))
                 .alias("contract_duration_category")
             )
-        
+
         return df
-        
+
     def _flag_luxury_properties(self, df: pl.DataFrame) -> pl.DataFrame:
         """Flag luxury properties based on rent and PSF."""
         if "price_per_sqft" in df.columns and "annual_amount" in df.columns:
             logger.debug("Flagging luxury properties...")
-            
+
             # Calculate percentile thresholds
-            valid_data = df.filter(
-                (pl.col("price_per_sqft").is_not_null()) &
-                (pl.col("annual_amount").is_not_null())
-            )
-            
+            valid_data = df.filter((pl.col("price_per_sqft").is_not_null()) & (pl.col("annual_amount").is_not_null()))
+
             if valid_data.height > 0:
-                psf_threshold = valid_data["price_per_sqft"].quantile(
-                    MARKET_METRICS["luxury_psf_percentile"] / 100
-                )
-                rent_threshold = valid_data["annual_amount"].quantile(
-                    MARKET_METRICS["luxury_rent_percentile"] / 100
-                )
-                
+                psf_threshold = valid_data["price_per_sqft"].quantile(MARKET_METRICS["luxury_psf_percentile"] / 100)
+                rent_threshold = valid_data["annual_amount"].quantile(MARKET_METRICS["luxury_rent_percentile"] / 100)
+
                 df = df.with_columns(
-                    pl.when(
-                        (pl.col("price_per_sqft") >= psf_threshold) |
-                        (pl.col("annual_amount") >= rent_threshold)
-                    )
+                    pl.when((pl.col("price_per_sqft") >= psf_threshold) | (pl.col("annual_amount") >= rent_threshold))
                     .then(pl.lit(True))
                     .otherwise(pl.lit(False))
                     .alias("is_luxury")
                 )
             else:
                 df = df.with_columns(pl.lit(False).alias("is_luxury"))
-        
+
         return df
-        
+
     def _add_usage_category(self, df: pl.DataFrame) -> pl.DataFrame:
         """Add simplified usage category (Residential/Commercial/Other)."""
         if "property_usage_en" in df.columns:
             logger.debug("Adding usage category...")
-            
+
             df = df.with_columns(
                 pl.when(pl.col("property_usage_en").str.contains("(?i)residential"))
                 .then(pl.lit("Residential"))
@@ -234,7 +219,7 @@ class RentContractsEnricher:
                 .otherwise(pl.lit("Other"))
                 .alias("usage_category")
             )
-        
+
         return df
 
     def _add_bulk_flag(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -253,10 +238,10 @@ class RentContractsEnricher:
 def enrich_rent_contracts(df: pl.DataFrame) -> pl.DataFrame:
     """
     Convenience function to enrich rent contracts data.
-    
+
     Args:
         df: DataFrame to enrich
-        
+
     Returns:
         Enriched DataFrame
     """

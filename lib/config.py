@@ -29,6 +29,7 @@ DLD_SCHEMA = {
 
 class AreaTier(Enum):
     """Classification of Dubai areas by market tier."""
+
     PREMIUM = "Premium"
     MID_TIER = "Mid-Tier"
     BUDGET = "Budget"
@@ -37,6 +38,7 @@ class AreaTier(Enum):
 
 class PropertyType(Enum):
     """Standard property types in Dubai."""
+
     APARTMENT = "Apartment"
     VILLA = "Villa"
     TOWNHOUSE = "Townhouse"
@@ -59,7 +61,6 @@ AREA_CLASSIFICATIONS: Dict[str, AreaTier] = {
     "Business Bay": AreaTier.PREMIUM,
     "Dubai Hills Estate": AreaTier.PREMIUM,
     "Arabian Ranches": AreaTier.PREMIUM,
-    
     # Mid-Tier Areas
     "Jumeirah Village Circle": AreaTier.MID_TIER,
     "Jumeirah Village Triangle": AreaTier.MID_TIER,
@@ -69,14 +70,12 @@ AREA_CLASSIFICATIONS: Dict[str, AreaTier] = {
     "The Views": AreaTier.MID_TIER,
     "Discovery Gardens": AreaTier.MID_TIER,
     "Mirdif": AreaTier.MID_TIER,
-    
     # Budget Areas
     "International City": AreaTier.BUDGET,
     "Deira": AreaTier.BUDGET,
     "Bur Dubai": AreaTier.BUDGET,
     "Al Nahda": AreaTier.BUDGET,
     "Al Qusais": AreaTier.BUDGET,
-    
     # Emerging Areas
     "Dubai South": AreaTier.EMERGING,
     "Dubailand": AreaTier.EMERGING,
@@ -89,17 +88,14 @@ VALIDATION_THRESHOLDS = {
     # Rent amount ranges (AED per year)
     "min_annual_rent": 10000,
     "max_annual_rent": 5000000,
-    
     # Property size ranges (square feet)
     "min_property_size": 200,
     "max_property_size": 50000,
-    
     # Price per square foot ranges (AED)
     "min_psf_residential": 20,
     "max_psf_residential": 500,
     "min_psf_commercial": 30,
     "max_psf_commercial": 800,
-    
     # Contract duration (days)
     "min_contract_days": 30,
     "max_contract_days": 730,  # 2 years
@@ -142,16 +138,13 @@ COMMERCIAL_USAGE = [
 ]
 
 
-
 # Market Metrics Configuration
 MARKET_METRICS = {
     # Percentile thresholds for luxury classification
     "luxury_psf_percentile": 75,
     "luxury_rent_percentile": 80,
-    
     # Outlier detection (IQR multiplier)
     "outlier_iqr_multiplier": 3.0,
-    
     # Minimum sample size for area statistics
     "min_area_sample_size": 10,
 }
@@ -255,16 +248,50 @@ RAW_RENTS_CSV_DTYPES = {
 # The 44 payload columns this schema must cover, in payload order. Kept next to the
 # dtypes so a new payload column is one edit away from being pinned.
 RAW_RENTS_CSV_COLUMNS: tuple[str, ...] = (
-    "RN", "DEFAULT_SORT", "TOTAL", "TOTAL_PROPERTIES", "IS_FREE_HOLD_EN",
-    "IS_FREE_HOLD_AR", "VERSION_EN", "VERSION_AR", "REGISTRATION_DATE", "START_DATE",
-    "END_DATE", "AREA_ID", "AREA_EN", "AREA_AR", "CONTRACT_AMOUNT", "ANNUAL_AMOUNT",
-    "IS_FREE_HOLD", "ACTUAL_AREA", "EJARI_PROPERTY_TYPE_ID", "PROP_TYPE_EN",
-    "PROP_TYPE_AR", "EJARI_PROPERTY_SUB_TYPE_ID", "PROP_SUB_TYPE_EN", "PROP_SUB_TYPE_AR",
-    "ROOMS", "PROPERTY_USAGE_ID", "USAGE_EN", "USAGE_AR", "NEAREST_METRO_EN",
-    "NEAREST_METRO_AR", "NEAREST_MALL_EN", "NEAREST_MALL_AR", "NEAREST_LANDMARK_EN",
-    "NEAREST_LANDMARK_AR", "PARKING", "PROJECT_EN", "PROJECT_AR", "MASTER_PROJECT_EN",
-    "MASTER_PROJECT_AR", "CONTRACT_NUMBER", "VERSION_NUMBER", "PROPERTY_ID",
-    "PARCEL_ID", "LAND_PROPERTY_ID",
+    "RN",
+    "DEFAULT_SORT",
+    "TOTAL",
+    "TOTAL_PROPERTIES",
+    "IS_FREE_HOLD_EN",
+    "IS_FREE_HOLD_AR",
+    "VERSION_EN",
+    "VERSION_AR",
+    "REGISTRATION_DATE",
+    "START_DATE",
+    "END_DATE",
+    "AREA_ID",
+    "AREA_EN",
+    "AREA_AR",
+    "CONTRACT_AMOUNT",
+    "ANNUAL_AMOUNT",
+    "IS_FREE_HOLD",
+    "ACTUAL_AREA",
+    "EJARI_PROPERTY_TYPE_ID",
+    "PROP_TYPE_EN",
+    "PROP_TYPE_AR",
+    "EJARI_PROPERTY_SUB_TYPE_ID",
+    "PROP_SUB_TYPE_EN",
+    "PROP_SUB_TYPE_AR",
+    "ROOMS",
+    "PROPERTY_USAGE_ID",
+    "USAGE_EN",
+    "USAGE_AR",
+    "NEAREST_METRO_EN",
+    "NEAREST_METRO_AR",
+    "NEAREST_MALL_EN",
+    "NEAREST_MALL_AR",
+    "NEAREST_LANDMARK_EN",
+    "NEAREST_LANDMARK_AR",
+    "PARKING",
+    "PROJECT_EN",
+    "PROJECT_AR",
+    "MASTER_PROJECT_EN",
+    "MASTER_PROJECT_AR",
+    "CONTRACT_NUMBER",
+    "VERSION_NUMBER",
+    "PROPERTY_ID",
+    "PARCEL_ID",
+    "LAND_PROPERTY_ID",
 )
 
 
@@ -283,7 +310,6 @@ DATA_QUALITY_RULES = {
         "property_usage_en",
         "annual_amount",
     ],
-    
     "date_fields": [
         "contract_start_date",
         "contract_end_date",
@@ -302,10 +328,10 @@ REPORT_CONFIG = {
 def get_area_tier(area_name: str) -> AreaTier:
     """
     Get the market tier for a given area.
-    
+
     Args:
         area_name: Name of the area
-        
+
     Returns:
         AreaTier enum value, defaults to MID_TIER if not found
     """
@@ -315,16 +341,16 @@ def get_area_tier(area_name: str) -> AreaTier:
 def normalize_property_type(property_type: str) -> str:
     """
     Normalize property type to standard format.
-    
+
     Args:
         property_type: Raw property type string
-        
+
     Returns:
         Normalized property type string
     """
     if not property_type:
         return "Unknown"
-    
+
     normalized = property_type.lower().strip()
     return PROPERTY_TYPE_MAPPINGS.get(normalized, property_type.title())
 
@@ -332,10 +358,10 @@ def normalize_property_type(property_type: str) -> str:
 def is_residential(usage: str) -> bool:
     """
     Check if property usage is residential.
-    
+
     Args:
         usage: Property usage string
-        
+
     Returns:
         True if residential, False otherwise
     """
@@ -345,47 +371,64 @@ def is_residential(usage: str) -> bool:
 def is_commercial(usage: str) -> bool:
     """
     Check if property usage is commercial.
-    
+
     Args:
         usage: Property usage string
-        
+
     Returns:
         True if commercial, False otherwise
     """
     return usage in COMMERCIAL_USAGE
 
 
+# The reporting floor: below this area a per-sqft figure is meaningless, so the
+# guarded division returns null. Single owner — silver_contract, enrichment and
+# market_analytics all read THIS, none carries its own 200. It deliberately
+# equals VALIDATION_THRESHOLDS["min_property_size"] but is not read from it: that
+# is the validity range, this is the reporting floor.
+PSF_MIN_AREA_SQFT = 200
+
+
+def psf_expression(amount_col: str = "annual_amount", area_col: str = "actual_area"):
+    """Polars expression: guarded rent-per-sqft, else null.
+
+    The single owner of both the division and PSF_MIN_AREA_SQFT, so no surface
+    can report a PSF for a non-positive rent or an unusable area. Publishing
+    bands are a separate decision — apply `psf_band_filter` on top.
+    """
+    return (
+        pl.when(
+            pl.col(amount_col).is_not_null()
+            & (pl.col(amount_col) > 0)
+            & pl.col(area_col).is_not_null()
+            & (pl.col(area_col) >= PSF_MIN_AREA_SQFT)
+        )
+        .then(pl.col(amount_col) / pl.col(area_col))
+        .otherwise(None)
+    )
+
+
 def psf_band_filter(psf_column: str = "psf"):
     """Polars expression: keep a PSF only if it sits inside the validity band for
-    its usage class. The area floor is NOT applied here — Silver already nulls
-    PSF below PSF_MIN_AREA_SQFT, and repeating it is what previously let
-    avg_psf 4691 ship (output/property_usage_20260913.csv).
+    its usage class. The area floor is NOT applied here — that is `psf_expression`,
+    which nulls PSF below PSF_MIN_AREA_SQFT, and repeating it is what previously
+    let avg_psf 4691 ship (output/property_usage_20260913.csv).
 
     This is a publishing decision, not a computation: a 200+ sqft unit at
     8228 AED/sqft is a real registration, so Silver keeps it and Gold declines
     to report it. PropertyUsage and MarketAnalytics share this helper, so the
     BAND is defined once.
-
-    The AREA FLOOR is not shared, and there are three PSF computation sites, not
-    two: silver_contract.py:189 (behind PSF_MIN_AREA_SQFT, the reporting floor
-    this helper's docstring refers to), market_analytics.py:82 and
-    enrichment.py:94, each still carrying its own `200` literal. Follow-up: have
-    the latter two read Silver's rent_per_sqft and delete two divisions and two
-    literals. Do not describe the surfaces as unable to disagree until that lands.
     """
     return (
-        (
-            pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)
-            & pl.col(psf_column).is_between(
-                VALIDATION_THRESHOLDS["min_psf_residential"],
-                VALIDATION_THRESHOLDS["max_psf_residential"],
-            )
+        pl.col("property_usage_en").is_in(RESIDENTIAL_USAGE)
+        & pl.col(psf_column).is_between(
+            VALIDATION_THRESHOLDS["min_psf_residential"],
+            VALIDATION_THRESHOLDS["max_psf_residential"],
         )
-        | (
-            pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)
-            & pl.col(psf_column).is_between(
-                VALIDATION_THRESHOLDS["min_psf_commercial"],
-                VALIDATION_THRESHOLDS["max_psf_commercial"],
-            )
+    ) | (
+        pl.col("property_usage_en").is_in(COMMERCIAL_USAGE)
+        & pl.col(psf_column).is_between(
+            VALIDATION_THRESHOLDS["min_psf_commercial"],
+            VALIDATION_THRESHOLDS["max_psf_commercial"],
         )
     )

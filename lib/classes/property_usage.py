@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class PropertyUsage:
     """
     Processes property usage data and generates comprehensive reports.
-    
+
     Features:
     - Contract counts by usage type
     - Average, min, max rent statistics
@@ -22,11 +22,11 @@ class PropertyUsage:
     - Property size distributions
     - Year-over-year comparisons
     """
-    
+
     def __init__(self, output: str):
         """
         Initialize property usage analyzer.
-        
+
         Args:
             output: Path to output file
         """
@@ -35,13 +35,13 @@ class PropertyUsage:
     def transform(self, input_file: str, include_yoy: bool = False) -> None:
         """
         Transform property usage data and generate comprehensive report.
-        
+
         Args:
             input_file: Path to input parquet file
             include_yoy: Whether to include year-over-year comparison
         """
         logger.info(f"Analyzing property usage from {input_file}")
-        
+
         try:
             lf = pl.scan_parquet(input_file)
             # P0 guard: if is_bulk_registration exists (enriched), exclude bulk
@@ -50,67 +50,82 @@ class PropertyUsage:
                 lf = lf.filter(pl.col("is_bulk_registration") == False)  # noqa: E712
 
             # Basic property usage statistics
-            property_usage_stats = lf.filter(
-                (pl.col("property_usage_en").is_not_null()) &
-                (pl.col("annual_amount").is_not_null()) &
-                (pl.col("annual_amount") > 0)
-            ).group_by("property_usage_en").agg([
-                pl.len().alias("no_of_contracts"),
-                pl.col("annual_amount").mean().alias("avg_rent"),
-                pl.col("annual_amount").median().alias("median_rent"),
-                pl.col("annual_amount").min().alias("min_rent"),
-                pl.col("annual_amount").max().alias("max_rent"),
-                pl.col("annual_amount").std().alias("std_rent"),
-            ])
-            
+            property_usage_stats = (
+                lf.filter(
+                    (pl.col("property_usage_en").is_not_null())
+                    & (pl.col("annual_amount").is_not_null())
+                    & (pl.col("annual_amount") > 0)
+                )
+                .group_by("property_usage_en")
+                .agg(
+                    [
+                        pl.len().alias("no_of_contracts"),
+                        pl.col("annual_amount").mean().alias("avg_rent"),
+                        pl.col("annual_amount").median().alias("median_rent"),
+                        pl.col("annual_amount").min().alias("min_rent"),
+                        pl.col("annual_amount").max().alias("max_rent"),
+                        pl.col("annual_amount").std().alias("std_rent"),
+                    ]
+                )
+            )
+
             # Collect to add calculated columns
             df = property_usage_stats.collect()
-            
+
             # Add market share percentage
             total_contracts = df["no_of_contracts"].sum()
-            df = df.with_columns(
-                ((pl.col("no_of_contracts") / total_contracts) * 100).alias("market_share_pct")
-            )
-            
+            df = df.with_columns(((pl.col("no_of_contracts") / total_contracts) * 100).alias("market_share_pct"))
+
             # Add property size statistics if available
             if "actual_area" in lf.collect_schema().names():
-                size_stats = lf.filter(
-                    (pl.col("property_usage_en").is_not_null()) &
-                    (pl.col("actual_area").is_not_null()) &
-                    (pl.col("actual_area") > 0)
-                ).group_by("property_usage_en").agg([
-                    pl.col("actual_area").mean().alias("avg_area_sqft"),
-                    pl.col("actual_area").median().alias("median_area_sqft"),
-                ]).collect()
-                
+                size_stats = (
+                    lf.filter(
+                        (pl.col("property_usage_en").is_not_null())
+                        & (pl.col("actual_area").is_not_null())
+                        & (pl.col("actual_area") > 0)
+                    )
+                    .group_by("property_usage_en")
+                    .agg(
+                        [
+                            pl.col("actual_area").mean().alias("avg_area_sqft"),
+                            pl.col("actual_area").median().alias("median_area_sqft"),
+                        ]
+                    )
+                    .collect()
+                )
+
                 # Join with main stats
                 df = df.join(size_stats, on="property_usage_en", how="left")
-            
+
             # PSF is READ, never recomputed. Silver already applied the
-            # PSF_MIN_AREA_SQFT (200) floor when it derived rent_per_sqft, and
-            # that null IS the guard — repeating the division here bypassed it
-            # and shipped Residential avg_psf 4691 against a 20-500 band
-            # (output/property_usage_20260913.csv). The 200 floor is therefore
+            # PSF_MIN_AREA_SQFT floor when it derived rent_per_sqft, and that
+            # null IS the guard — repeating the division here bypassed it and
+            # shipped Residential avg_psf 4691 against a 20-500 band
+            # (output/property_usage_20260913.csv). The floor is therefore
             # deliberately absent from the filter below.
             #
-            # The band itself lives in one place, lib.config.psf_band_filter,
-            # shared with MarketAnalytics, so the two agree on what is
-            # reportable. The AREA FLOOR is not shared and there are three PSF
-            # computation sites, not two: silver_contract.py:189 (behind
-            # PSF_MIN_AREA_SQFT, applied above), market_analytics.py:82 and
-            # enrichment.py:94, each still carrying its own `200` literal.
-            # Follow-up: have the latter two read rent_per_sqft and delete two
-            # divisions and two literals. Do not call the surfaces unable to
-            # disagree until that lands.
+            # The floor and the band are each single-owner in lib.config:
+            # psf_expression (the guarded division, source of the null read
+            # here) and psf_band_filter (the publishing band). PropertyUsage
+            # reads rent_per_sqft and bands it; MarketAnalytics derives `psf`
+            # via the same psf_expression and bands it the same way, so the two
+            # cannot disagree about what is reportable.
             if "rent_per_sqft" in schema:
-                psf_stats = lf.filter(
-                    pl.col("property_usage_en").is_not_null() &
-                    pl.col("rent_per_sqft").is_not_null() &
-                    psf_band_filter("rent_per_sqft")
-                ).group_by("property_usage_en").agg([
-                    pl.col("rent_per_sqft").mean().alias("avg_psf"),
-                    pl.col("rent_per_sqft").median().alias("median_psf"),
-                ]).collect()
+                psf_stats = (
+                    lf.filter(
+                        pl.col("property_usage_en").is_not_null()
+                        & pl.col("rent_per_sqft").is_not_null()
+                        & psf_band_filter("rent_per_sqft")
+                    )
+                    .group_by("property_usage_en")
+                    .agg(
+                        [
+                            pl.col("rent_per_sqft").mean().alias("avg_psf"),
+                            pl.col("rent_per_sqft").median().alias("median_psf"),
+                        ]
+                    )
+                    .collect()
+                )
 
                 # Join with main stats
                 df = df.join(psf_stats, on="property_usage_en", how="left")
@@ -125,19 +140,17 @@ class PropertyUsage:
                 )
 
             # Add report date
-            df = df.with_columns(
-                pl.lit(date.today()).cast(pl.Date).alias("report_date")
-            )
-            
+            df = df.with_columns(pl.lit(date.today()).cast(pl.Date).alias("report_date"))
+
             # Sort by contract count descending
             df = df.sort("no_of_contracts", descending=True)
-            
+
             # Save to CSV
             df.write_csv(self.output)
-            
+
             logger.info(f"Property usage report saved to {self.output}")
             logger.info(f"Analyzed {len(df)} usage categories with {total_contracts:,} total contracts")
-            
+
             # Log top 5 categories
             logger.info("Top 5 property usage categories:")
             for row in df.head(5).iter_rows(named=True):
@@ -145,71 +158,86 @@ class PropertyUsage:
                     f"  {row['property_usage_en']}: {row['no_of_contracts']:,} contracts "
                     f"({row['market_share_pct']:.1f}%), avg rent: AED {row['avg_rent']:,.0f}"
                 )
-                
+
         except Exception as e:
             logger.error(f"Error analyzing property usage: {e}")
             raise
-            
-    def compare_periods(
-        self, 
-        current_file: str, 
-        previous_file: str,
-        output_comparison: str
-    ) -> None:
+
+    def compare_periods(self, current_file: str, previous_file: str, output_comparison: str) -> None:
         """
         Compare property usage between two periods.
-        
+
         Args:
             current_file: Path to current period data
             previous_file: Path to previous period data
             output_comparison: Path to save comparison report
         """
         logger.info("Comparing property usage across periods...")
-        
+
         try:
             # Load both periods
-            current = pl.scan_parquet(current_file).filter(
-                (pl.col("property_usage_en").is_not_null()) &
-                (pl.col("annual_amount").is_not_null()) &
-                (pl.col("annual_amount") > 0)
-            ).group_by("property_usage_en").agg([
-                pl.len().alias("current_contracts"),
-                pl.col("annual_amount").mean().alias("current_avg_rent"),
-            ]).collect()
-            
-            previous = pl.scan_parquet(previous_file).filter(
-                (pl.col("property_usage_en").is_not_null()) &
-                (pl.col("annual_amount").is_not_null()) &
-                (pl.col("annual_amount") > 0)
-            ).group_by("property_usage_en").agg([
-                pl.len().alias("previous_contracts"),
-                pl.col("annual_amount").mean().alias("previous_avg_rent"),
-            ]).collect()
-            
-            # Join and calculate changes
-            comparison = current.join(
-                previous, 
-                on="property_usage_en", 
-                how="outer"
-            ).with_columns([
-                ((pl.col("current_contracts") - pl.col("previous_contracts")) / 
-                 pl.col("previous_contracts") * 100).alias("contract_change_pct"),
-                ((pl.col("current_avg_rent") - pl.col("previous_avg_rent")) / 
-                 pl.col("previous_avg_rent") * 100).alias("rent_change_pct"),
-            ]).sort("current_contracts", descending=True)
-            
-            # Add report date
-            comparison = comparison.with_columns(
-                pl.lit(date.today()).cast(pl.Date).alias("report_date")
+            current = (
+                pl.scan_parquet(current_file)
+                .filter(
+                    (pl.col("property_usage_en").is_not_null())
+                    & (pl.col("annual_amount").is_not_null())
+                    & (pl.col("annual_amount") > 0)
+                )
+                .group_by("property_usage_en")
+                .agg(
+                    [
+                        pl.len().alias("current_contracts"),
+                        pl.col("annual_amount").mean().alias("current_avg_rent"),
+                    ]
+                )
+                .collect()
             )
-            
+
+            previous = (
+                pl.scan_parquet(previous_file)
+                .filter(
+                    (pl.col("property_usage_en").is_not_null())
+                    & (pl.col("annual_amount").is_not_null())
+                    & (pl.col("annual_amount") > 0)
+                )
+                .group_by("property_usage_en")
+                .agg(
+                    [
+                        pl.len().alias("previous_contracts"),
+                        pl.col("annual_amount").mean().alias("previous_avg_rent"),
+                    ]
+                )
+                .collect()
+            )
+
+            # Join and calculate changes
+            comparison = (
+                current.join(previous, on="property_usage_en", how="outer")
+                .with_columns(
+                    [
+                        (
+                            (pl.col("current_contracts") - pl.col("previous_contracts"))
+                            / pl.col("previous_contracts")
+                            * 100
+                        ).alias("contract_change_pct"),
+                        (
+                            (pl.col("current_avg_rent") - pl.col("previous_avg_rent"))
+                            / pl.col("previous_avg_rent")
+                            * 100
+                        ).alias("rent_change_pct"),
+                    ]
+                )
+                .sort("current_contracts", descending=True)
+            )
+
+            # Add report date
+            comparison = comparison.with_columns(pl.lit(date.today()).cast(pl.Date).alias("report_date"))
+
             # Save comparison
             comparison.write_csv(output_comparison)
-            
+
             logger.info(f"Period comparison saved to {output_comparison}")
-            
+
         except Exception as e:
             logger.error(f"Error comparing periods: {e}")
             raise
-
-        
