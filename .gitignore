@@ -1,5 +1,9 @@
 .env
 .venv/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 **.xml
 **.iml
 .idea
@@ -12,12 +16,13 @@ build
 **.jsonl
 **.log
 **.parquet
-**.lock
 output/rental_analytics_*.duckdb
 output/rents_silver_*.parquet
 output/etl_status.json
 # local agent bundle & internal docs — not public
 SKILL.md
+# ...except the project Agent Skills, which are part of the repo
+!/.commandcode/skills/**/SKILL.md
 docs/EXPERT_REVIEW_AND_ROADMAP.md
 docs/IMPLEMENTATION_PLAN.md
 docs/architecture.gif
