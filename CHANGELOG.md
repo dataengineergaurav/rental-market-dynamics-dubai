@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Reproducible dependencies and a CI quality gate.** Dependencies resolve through `uv` and a
+  `uv.lock` is committed; `polars` is bounded (`>=1.0,<2`); dev tooling moves to the `dev` group
+  (`ruff`, `pytest-cov`). `make lint` (ruff check + format-check) and `make coverage` (pytest with a
+  `--cov-fail-under=75` ratchet) now run in `build_and_deploy.yml`, so an undefined name, unused
+  import, dtype move or coverage drop fails the push build instead of shipping. See
+  [ADR-11](docs/adr/0011-reproducibility-and-ci-quality-gates.md).
+- **PSF has one owner.** `lib.config.PSF_MIN_AREA_SQFT` (the reporting floor) and
+  `lib.config.psf_expression` (the guarded division) replace the three private `200` literals in
+  `silver_contract`, `enrichment` and `market_analytics`, so the surfaces can no longer disagree.
+- **Secrets are not logged.** `run_etl_pipeline` redacts the `EJARI_URL` query string before logging
+  the download line.
+- **Deliverables are trackable.** `.gitignore` re-includes `.commandcode/skills/**/SKILL.md` (the
+  project Agent Skills) and no longer ignores `*.lock`, so `uv.lock` commits.
+- **pydantic test accepts the current exception type.** `test_field_on_a_leading_underscore_name_is_an_error`
+  pinned a `NameError` that pydantic >= 2.13 raises as `PydanticUserError`; it now accepts both while
+  still asserting the loud, message-matching failure.
 - **Push builds no longer run the ETL.** `build_and_deploy.yml` runs `make build && make test`
   instead of `make all`, so pushing to `main`/`dev` (or a tag) no longer re-extracts the
   current window and clobbers the day's bronze release. Releases are written only by the

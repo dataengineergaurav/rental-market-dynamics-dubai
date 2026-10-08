@@ -105,8 +105,15 @@ make all              # build → daily ETL → tests
 make layers           # ingest today's CSV into the cumulative layers DuckDB
 make layers-publish   # publish the layers DuckDB into the day's release
 make test             # pytest
+make lint             # ruff check + format-check
+make coverage         # pytest with a coverage floor
 make scrapy-rents     # Scrapy extract only
 ```
+
+Quality gates run in CI on every push (`build_and_deploy.yml`): `make lint` (high-signal ruff —
+undefined names, unused imports, real-bug lints) and `make coverage` (a ratchet floor in the
+`Makefile`). Dependencies are locked — `uv sync` reproduces the environment from `uv.lock`. See
+[ADR-11](docs/adr/0011-reproducibility-and-ci-quality-gates.md).
 
 Daily entry point: `run_etl_pipeline.py`. Layers ingest:
 `python -m lib.analysis.build_layers_duckdb --csv output/rent_contracts_YYYYMMDD.csv` (repeat `--csv`

@@ -16,6 +16,9 @@ help:
 	@echo "  scrapy-rents - Scrapy rents Ejari (slow)"
 	@echo "  notebook - Execute the Jupyter Notebook"
 	@echo "  test     - Run tests"
+	@echo "  lint     - Lint and format-check with ruff"
+	@echo "  coverage - Run tests with a coverage floor"
+	@echo "  check    - Lint + coverage (the CI quality gate)"
 	@echo "  layers   - Ingest today's CSV into the cumulative layers DuckDB"
 	@echo "  layers-publish - Publish the layers DuckDB into the day's release"
 	@echo "  clean    - Clean build artifacts and temporary files"
@@ -69,5 +72,20 @@ test:
 	@echo "Running tests..."
 	pytest .
 
+# Lint: ruff checks (undefined names, unused imports, syntax, real-bug lints) and formatting.
+lint:
+	@echo "Linting with ruff..."
+	ruff check .
+	ruff format --check .
+
+# Coverage: tests with a floor that ratchets (raise it as coverage improves, never lower to pass).
+COVERAGE_FLOOR := 75
+coverage:
+	@echo "Running tests with coverage (floor $(COVERAGE_FLOOR))..."
+	pytest --cov=lib --cov-report=term-missing --cov-fail-under=$(COVERAGE_FLOOR)
+
+# Check: the full CI quality gate.
+check: lint coverage
+
 # Declare phony targets to avoid conflicts with files
-.PHONY: all help clean build etl test scrapy-rents layers layers-publish
+.PHONY: all help clean build etl test lint coverage check scrapy-rents layers layers-publish

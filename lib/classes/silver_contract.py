@@ -12,6 +12,7 @@ The model is frozen, so derived fields must be set with
 object.__setattr__(self, ...) inside mode="after" validators, never self.x = ...,
 which raises under frozen=True.
 """
+
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -21,14 +22,10 @@ from typing import Optional
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lib.config import VALIDATION_THRESHOLDS
+from lib.config import PSF_MIN_AREA_SQFT, VALIDATION_THRESHOLDS
 
 SHORT_TERM_DAYS = 300
 RECONCILE_TOLERANCE = Decimal("0.05")
-# 200 sqft equals VALIDATION_THRESHOLDS["min_property_size"], deliberately not
-# read from it: that is the validity range, this is the reporting floor below
-# which a per-sqft figure is meaningless.
-PSF_MIN_AREA_SQFT = 200
 DAYS_PER_YEAR = Decimal("365.25")
 
 # These three are dropped for TWO DIFFERENT REASONS. Do not read this as one.
@@ -456,19 +453,13 @@ def _rollup(frame: pl.DataFrame, out_violations: dict[str, int]) -> pl.DataFrame
         if observed > declared:
             # the key merged two distinct contracts: irreducibly ambiguous
             # without a contract number
-            out_violations["merged_contract_group"] = out_violations.get(
-                "merged_contract_group", 0
-            ) + observed
+            out_violations["merged_contract_group"] = out_violations.get("merged_contract_group", 0) + observed
         elif observed < declared:
             # the window captured only part of the contract
-            out_violations["partial_contract_capture"] = out_violations.get(
-                "partial_contract_capture", 0
-            ) + observed
+            out_violations["partial_contract_capture"] = out_violations.get("partial_contract_capture", 0) + observed
         rows.append(
             {
-                "group_id": hashlib.sha256(
-                    "|".join(str(k) for k in key).encode("utf-8")
-                ).hexdigest()[:32],
+                "group_id": hashlib.sha256("|".join(str(k) for k in key).encode("utf-8")).hexdigest()[:32],
                 "start_date": key[0],
                 "end_date": key[1],
                 # CONTRACT-LEVEL, repeated per member row. Deduplicated, never
@@ -481,9 +472,7 @@ def _rollup(frame: pl.DataFrame, out_violations: dict[str, int]) -> pl.DataFrame
                 "total_area_sqft": block["actual_area"].sum(),
                 "record_ids": block["record_id"].to_list(),
                 # a set of categories, not one entry per property row
-                "usages": sorted(
-                    {u for u in block["property_usage_en"].to_list() if u is not None}
-                ),
+                "usages": sorted({u for u in block["property_usage_en"].to_list() if u is not None}),
                 "is_complete": observed == declared,
             }
         )
@@ -541,10 +530,7 @@ def to_silver(df: pl.DataFrame) -> SilverContractResult:
         frame=frame,
         # same reason as above: `failed` is raw source rows, and a raw source
         # field is exactly the kind of late-populating column that trips this.
-        quarantined=pl.DataFrame(failed, infer_schema_length=None)
-        if failed
-        else df.clear(),
+        quarantined=pl.DataFrame(failed, infer_schema_length=None) if failed else df.clear(),
         groups=_rollup(frame, violations),  # mutates violations in place
         violation_counts=violations,
     )
-

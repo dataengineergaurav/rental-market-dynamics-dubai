@@ -10,14 +10,15 @@ Stages:
 Usage:
     EJARI_URL=<endpoint> python run_etl_pipeline.py
 """
+
 from __future__ import annotations
 
 from pathlib import Path
-import glob
 import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 from dotenv import load_dotenv
 
 from lib.extract.ejari_rents_downloader import EjariRentsDownloader  # kept for test patch compatibility
@@ -31,6 +32,22 @@ load_dotenv()
 
 configure_root_logger(logfile="etl.log", loglevel="DEBUG")
 logger = get_logger("ETL")
+
+
+def _redact_url(url: str) -> str:
+    """Loggable form of EJARI_URL: scheme://host/path with the query string removed.
+
+    The endpoint may carry a token or key in its query string, so the raw value
+    must never reach a log. Unparseable input returns a placeholder rather than
+    the original.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<configured EJARI_URL endpoint>"
+    if not parts.scheme or not parts.netloc:
+        return "<configured EJARI_URL endpoint>"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def _incremental_window(output_dir: Path) -> tuple[str, str]:
@@ -65,7 +82,9 @@ def _data_rows(csv_path: str | Path) -> int:
         return 0
 
 
-def _write_run_status(output_dir: Path, *, outcome: str, data_date: str, from_date: str, to_date: str, data_rows: int) -> None:
+def _write_run_status(
+    output_dir: Path, *, outcome: str, data_date: str, from_date: str, to_date: str, data_rows: int
+) -> None:
     """Persist one status record per run. Best-effort: never fails the pipeline.
 
     The daily job stays fail-open (ADR-03) — `outcome="no_data"` is still a
@@ -102,7 +121,7 @@ def download_rents(url: str, filename: str, from_date: str | None = None, to_dat
         from_date = from_date or fd
         to_date = to_date or td
 
-    logger.info(f"Downloading rents from {url} to {filename} via Scrapy spider [{from_date} -> {to_date}]")
+    logger.info(f"Downloading rents from {_redact_url(url)} to {filename} via Scrapy spider [{from_date} -> {to_date}]")
     # test seam: example.com URLs used in tests -> skip spider, use direct downloader directly (keeps patch target stable)
     if "example.com" in url:
         if EjariRentsDownloader(url).run(filename):
@@ -115,11 +134,27 @@ def download_rents(url: str, filename: str, from_date: str | None = None, to_dat
         import sys
 
         out = str(Path(filename).resolve())
-        cmd = [sys.executable, "-m", "scrapy", "crawl", "rents", "-o", out, "-a", f"url={url}", "-a", f"from_date={from_date}", "-a", f"to_date={to_date}"]
+        cmd = [
+            sys.executable,
+            "-m",
+            "scrapy",
+            "crawl",
+            "rents",
+            "-o",
+            out,
+            "-a",
+            f"url={url}",
+            "-a",
+            f"from_date={from_date}",
+            "-a",
+            f"to_date={to_date}",
+        ]
         try:
             result = subprocess.run(cmd, cwd="rents_scraper", capture_output=True, text=True, timeout=900)
         except subprocess.TimeoutExpired as e:
-            logger.warning(f"Spider timed out after 900s for {from_date}->{to_date}: {e} — falling back to direct downloader")
+            logger.warning(
+                f"Spider timed out after 900s for {from_date}->{to_date}: {e} — falling back to direct downloader"
+            )
             if EjariRentsDownloader(url).run(filename, from_date=from_date, to_date=to_date):
                 logger.info(f"Download complete: {filename} (direct after timeout, {from_date}->{to_date})")
                 return True
@@ -142,7 +177,9 @@ def download_rents(url: str, filename: str, from_date: str | None = None, to_dat
                 pass
             logger.info(f"Download complete: {filename} (spider)")
             return True
-        logger.warning(f"Spider failed (code={result.returncode}): {result.stderr[:800]} — falling back to direct downloader")
+        logger.warning(
+            f"Spider failed (code={result.returncode}): {result.stderr[:800]} — falling back to direct downloader"
+        )
         if EjariRentsDownloader(url).run(filename, from_date=from_date, to_date=to_date):
             logger.info(f"Download complete: {filename} (direct, {from_date}->{to_date})")
             return True
@@ -218,7 +255,9 @@ def analyze_property_usage(input_parquet: str, output_report: str) -> bool:
         raise
 
 
-def publish_artifacts_to_github(files: list, release_notes: str = "RELEASE_NOTES.md", data_date: str | None = None) -> None:
+def publish_artifacts_to_github(
+    files: list, release_notes: str = "RELEASE_NOTES.md", data_date: str | None = None
+) -> None:
     """Publish data artifacts to GitHub Release.
 
     `data_date` (YYYYMMDD) sets the tag to release-YYYY-MM-DD explicitly. It is required when the
@@ -251,7 +290,9 @@ def publish_artifacts_to_github(files: list, release_notes: str = "RELEASE_NOTES
                 if m:
                     tag_name = f"release-{m.group(1)}-{m.group(2)}-{m.group(3)}"
                     break
-        GitHubRelease('dataengineergaurav/rental-market-dynamics-dubai').publish(files=existing_files, tag_name=tag_name)
+        GitHubRelease("dataengineergaurav/rental-market-dynamics-dubai").publish(
+            files=existing_files, tag_name=tag_name
+        )
         logger.info("GitHub publication complete!")
     except Exception as e:
         logger.error(f"GitHub publication failed: {e}")
@@ -271,13 +312,13 @@ def main():
         return False
 
     # artifacts are named for the data date (yesterday — same basis as _incremental_window)
-    date_str = (datetime.now(timezone.utc).date() - timedelta(days=1)).strftime('%Y%m%d')
+    date_str = (datetime.now(timezone.utc).date() - timedelta(days=1)).strftime("%Y%m%d")
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    csv_filename = output_dir / f'rent_contracts_{date_str}.csv'
-    parquet_filename = str(output_dir / f'rent_contracts_{date_str}.parquet')
-    property_usage_report = str(output_dir / f'property_usage_{date_str}.csv')
+    csv_filename = output_dir / f"rent_contracts_{date_str}.csv"
+    parquet_filename = str(output_dir / f"rent_contracts_{date_str}.parquet")
+    property_usage_report = str(output_dir / f"property_usage_{date_str}.csv")
 
     # computed once so the download and the run-status record share one window
     from_date, to_date = _incremental_window(output_dir)
@@ -298,13 +339,13 @@ def main():
                 f"NO_NEW_DATA: window {from_date} -> {to_date} produced no registrations "
                 f"({csv_filename} is empty or a placeholder); skipping transform/analyze"
             )
-            _write_run_status(output_dir, outcome="no_data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=0)
+            _write_run_status(
+                output_dir, outcome="no_data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=0
+            )
             if os.getenv("GH_TOKEN"):
                 # Quiet day: publish the status marker so the release list is self-describing. A
                 # missing release then means the job never ran; a release with no CSV means no data.
-                publish_artifacts_to_github(
-                    [str(output_dir / "etl_status.json")], data_date=date_str
-                )
+                publish_artifacts_to_github([str(output_dir / "etl_status.json")], data_date=date_str)
             logger.info("=" * 60)
             logger.info("ETL PIPELINE COMPLETED — NO NEW DATA (incremental)")
             logger.info("=" * 60)
@@ -323,15 +364,20 @@ def main():
             logger.warning(f"Analyze skipped: {e}")
 
         # write the run status BEFORE publishing: it is published as an asset, so it must exist
-        _write_run_status(output_dir, outcome="data", data_date=date_str, from_date=from_date, to_date=to_date, data_rows=_data_rows(csv_filename))
+        _write_run_status(
+            output_dir,
+            outcome="data",
+            data_date=date_str,
+            from_date=from_date,
+            to_date=to_date,
+            data_rows=_data_rows(csv_filename),
+        )
 
         if os.getenv("GH_TOKEN"):
             # Bronze (raw) layer: the untransformed daily CSV is the published bronze artifact,
             # with the run status riding along so every release is self-describing. Parquet/report
             # stay local — the Silver/Gold layers are ingested daily from this CSV (lib/analysis).
-            publish_artifacts_to_github(
-                [str(csv_filename), str(output_dir / "etl_status.json")], data_date=date_str
-            )
+            publish_artifacts_to_github([str(csv_filename), str(output_dir / "etl_status.json")], data_date=date_str)
         else:
             logger.info("Skipping GitHub publication (GH_TOKEN not set)")
 

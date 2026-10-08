@@ -3,7 +3,7 @@ python-dotenv
 coloredlogs
 cmake
 setuptools
-polars
+polars>=1.0,<2
 pytest
 jupyter
 requests-mock

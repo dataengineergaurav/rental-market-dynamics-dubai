@@ -2,11 +2,13 @@
 Rents transformer — Ejari rents CSV (Rent Transaction Details) -> Parquet
 Fields: REGISTRATION_DATE, START_DATE, END_DATE, AREA_EN, ANNUAL_AMOUNT, CONTRACT_AMOUNT, ACTUAL_AREA, PROP_TYPE_EN, USAGE_EN ...
 """
+
 import logging
 import polars as pl
 from lib.config import FILE_CONFIG, RAW_RENTS_CSV_DTYPES
 
 logger = logging.getLogger(__name__)
+
 
 class RentsTransformer:
     def __init__(self, input_file: str, output_file: str):
@@ -55,9 +57,13 @@ class RentsTransformer:
                     lf = lf.with_columns(pl.col(src).alias(dst))
 
             sample = lf.head(100_000).collect()
-            logger.info(f"Rents sample {sample.height:,} rows, {len(sample.columns)} cols. ANNUAL_AMOUNT nulls: {sample['ANNUAL_AMOUNT'].null_count() if 'ANNUAL_AMOUNT' in sample.columns else 'n/a'}")
+            logger.info(
+                f"Rents sample {sample.height:,} rows, {len(sample.columns)} cols. ANNUAL_AMOUNT nulls: {sample['ANNUAL_AMOUNT'].null_count() if 'ANNUAL_AMOUNT' in sample.columns else 'n/a'}"
+            )
             if "AREA_EN" in sample.columns:
-                logger.info(f"Top areas: {sample.group_by('AREA_EN').len().sort('len', descending=True).head(3).to_dict(as_series=False)}")
+                logger.info(
+                    f"Top areas: {sample.group_by('AREA_EN').len().sort('len', descending=True).head(3).to_dict(as_series=False)}"
+                )
 
             lf.sink_parquet(
                 self.output_file,

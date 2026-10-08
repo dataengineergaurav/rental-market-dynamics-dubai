@@ -6,6 +6,7 @@ the 100-row inference window becomes String; a whole-number money column becomes
 broken both the daily and weekly builds. These tests pin the two things that keep the hole closed:
 the schema covers every payload column, and the overrides actually win over inference.
 """
+
 from __future__ import annotations
 
 import csv
@@ -57,8 +58,6 @@ def test_leading_nulls_do_not_change_a_pinned_type(tmp_path):
             writer.writerow(empty)
         writer.writerow(["0"] * len(RAW_RENTS_CSV_COLUMNS))
 
-    pinned = pl.scan_csv(
-        path, null_values=["null", "NULL", ""], schema_overrides=RAW_RENTS_CSV_DTYPES
-    ).collect_schema()
+    pinned = pl.scan_csv(path, null_values=["null", "NULL", ""], schema_overrides=RAW_RENTS_CSV_DTYPES).collect_schema()
     assert pinned["PARKING"] == pl.Int64
     assert pinned["AREA_EN"] == pl.Utf8

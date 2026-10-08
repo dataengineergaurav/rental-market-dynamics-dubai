@@ -10,6 +10,7 @@ Contracts:
   - Hotel / Labor Camps sub-types and Virtual Unit property types are excluded from rent medians,
     as is bulk-registration stock, matching the shipped `gold_area_median` contract.
 """
+
 from __future__ import annotations
 
 _GOLD_AREA_MEDIAN = """

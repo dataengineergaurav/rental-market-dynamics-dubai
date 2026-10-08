@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API_URL = "https://api.github.com"
 
+
 class GitHubRelease:
     """
     A class to handle publishing releases to a GitHub repository.
@@ -21,10 +22,10 @@ class GitHubRelease:
     Methods:
         create_release():
             Creates a new release in the specified GitHub repository.
-        
+
         upload_files(release, files):
             Uploads files to the specified GitHub release.
-        
+
         publish(files):
             Creates a new release and uploads the specified files to it.
 
@@ -32,16 +33,14 @@ class GitHubRelease:
         publisher = GitHubReleasePublisher(repo="owner/repo")
         publisher.publish(files=["file1.txt", "file2.zip"])
     """
+
     def __init__(self, repo):
         self.repo = repo
         self.token = os.getenv("GH_TOKEN")
         if not self.token:
             logger.error("GH_TOKEN not found in environment variables")
             raise ValueError("GH_TOKEN not set")
-        self.headers = {
-            "Authorization": f"token {self.token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+        self.headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
 
     def create_release(self, tag_name=None, name=None, body=None):
         tag_name = tag_name or f"release-{date.today()}"
@@ -52,11 +51,13 @@ class GitHubRelease:
             "name": release_name,
             "body": body or "Automated release",
             "draft": False,
-            "prerelease": False
+            "prerelease": False,
         }
 
         try:
-            response = requests.post(f"{GITHUB_API_URL}/repos/{self.repo}/releases", headers=self.headers, json=release_data)
+            response = requests.post(
+                f"{GITHUB_API_URL}/repos/{self.repo}/releases", headers=self.headers, json=release_data
+            )
             response.raise_for_status()
             release = response.json()
             logger.info(f"Created GitHub release {release_name}")
@@ -92,8 +93,8 @@ class GitHubRelease:
             try:
                 self._delete_asset_named(release, name)
 
-                with open(file, 'rb') as f:
-                    upload_url = release['upload_url'].split('{')[0] + f"?name={name}"
+                with open(file, "rb") as f:
+                    upload_url = release["upload_url"].split("{")[0] + f"?name={name}"
                     upload_headers = self.headers.copy()
                     upload_headers["Content-Type"] = "application/octet-stream"
 
@@ -110,7 +111,9 @@ class GitHubRelease:
             tag_name = tag_name or f"release-{date.today()}"
             if self.release_exists(tag_name):
                 # reuse existing release for incremental re-runs same day
-                resp = requests.get(f"{GITHUB_API_URL}/repos/{self.repo}/releases/tags/{tag_name}", headers=self.headers)
+                resp = requests.get(
+                    f"{GITHUB_API_URL}/repos/{self.repo}/releases/tags/{tag_name}", headers=self.headers
+                )
                 resp.raise_for_status()
                 release = resp.json()
                 logger.info(f"Reusing existing release {tag_name}")
@@ -119,7 +122,6 @@ class GitHubRelease:
             self.upload_files(release, files)
         except Exception as e:
             logger.error(f"Failed to publish release: {e}")
-    
 
     def release_exists(self, tag_name):
         """

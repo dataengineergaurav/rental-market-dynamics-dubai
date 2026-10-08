@@ -5,6 +5,7 @@ The core new guarantee is idempotency: `contract_id` is the primary key, so re-i
 them. The Silver tables and Gold views live in the same file, so the views resolve with no
 `ATTACH`.
 """
+
 from __future__ import annotations
 
 import csv
@@ -18,10 +19,25 @@ from lib.analysis.build_layers_duckdb import ingest_layers
 from lib.analysis.layers import connect_layers
 
 _CSV_COLUMNS = [
-    "RN", "CONTRACT_NUMBER", "AREA_EN", "PROP_SUB_TYPE_EN", "PROP_TYPE_EN", "USAGE_EN",
-    "NEAREST_METRO_EN", "PROJECT_EN", "MASTER_PROJECT_EN", "REGISTRATION_DATE", "START_DATE",
-    "END_DATE", "ANNUAL_AMOUNT", "CONTRACT_AMOUNT", "ACTUAL_AREA", "ROOMS", "TOTAL_PROPERTIES",
-    "PARKING", "IS_FREE_HOLD",
+    "RN",
+    "CONTRACT_NUMBER",
+    "AREA_EN",
+    "PROP_SUB_TYPE_EN",
+    "PROP_TYPE_EN",
+    "USAGE_EN",
+    "NEAREST_METRO_EN",
+    "PROJECT_EN",
+    "MASTER_PROJECT_EN",
+    "REGISTRATION_DATE",
+    "START_DATE",
+    "END_DATE",
+    "ANNUAL_AMOUNT",
+    "CONTRACT_AMOUNT",
+    "ACTUAL_AREA",
+    "ROOMS",
+    "TOTAL_PROPERTIES",
+    "PARKING",
+    "IS_FREE_HOLD",
 ]
 
 _EXPECTED_VIEWS = {
@@ -37,12 +53,25 @@ _EXPECTED_VIEWS = {
 
 def _row(rn, registration, contract, amount=80000.0, area="Dubai Marina", metro="Dubai Marina Metro"):
     return {
-        "RN": rn, "CONTRACT_NUMBER": contract, "AREA_EN": area, "PROP_SUB_TYPE_EN": "Flat",
-        "PROP_TYPE_EN": "Flat", "USAGE_EN": "Residential", "NEAREST_METRO_EN": metro,
-        "PROJECT_EN": "Marina Tower", "MASTER_PROJECT_EN": "Dubai Marina",
-        "REGISTRATION_DATE": registration, "START_DATE": "2026-09-01T00:00:00",
-        "END_DATE": "2027-08-31T00:00:00", "ANNUAL_AMOUNT": amount, "CONTRACT_AMOUNT": amount,
-        "ACTUAL_AREA": 1000.0, "ROOMS": 2, "TOTAL_PROPERTIES": 1, "PARKING": 1, "IS_FREE_HOLD": 0,
+        "RN": rn,
+        "CONTRACT_NUMBER": contract,
+        "AREA_EN": area,
+        "PROP_SUB_TYPE_EN": "Flat",
+        "PROP_TYPE_EN": "Flat",
+        "USAGE_EN": "Residential",
+        "NEAREST_METRO_EN": metro,
+        "PROJECT_EN": "Marina Tower",
+        "MASTER_PROJECT_EN": "Dubai Marina",
+        "REGISTRATION_DATE": registration,
+        "START_DATE": "2026-09-01T00:00:00",
+        "END_DATE": "2027-08-31T00:00:00",
+        "ANNUAL_AMOUNT": amount,
+        "CONTRACT_AMOUNT": amount,
+        "ACTUAL_AREA": 1000.0,
+        "ROOMS": 2,
+        "TOTAL_PROPERTIES": 1,
+        "PARKING": 1,
+        "IS_FREE_HOLD": 0,
     }
 
 
@@ -125,7 +154,12 @@ def test_views_resolve_without_attach(tmp_path: Path, db_path: str):
             cols = [c[0] for c in con.execute(f"SELECT * FROM {agg} LIMIT 0").description]
             assert "n" in cols or "n_contracts" in cols, (agg, cols)
         assert [c[0] for c in con.execute("SELECT * FROM gold_area_median LIMIT 0").description] == [
-            "area_name_en", "n", "median_rent", "mean_rent", "min_rent", "max_rent",
+            "area_name_en",
+            "n",
+            "median_rent",
+            "mean_rent",
+            "min_rent",
+            "max_rent",
         ]
     finally:
         con.close()

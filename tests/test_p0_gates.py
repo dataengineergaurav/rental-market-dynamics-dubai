@@ -5,12 +5,14 @@ from lib.classes.validators import validate_rent_contracts
 
 
 def test_enrichment_tier_mapping():
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina", "International City", "Unknown Area X", "Business Bay"],
-        "ejari_property_type_en": ["Flat", "Flat", "Flat", "Flat"],
-        "annual_amount": [100000, 50000, 60000, 200000],
-        "actual_area": [800, 800, 800, 800],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina", "International City", "Unknown Area X", "Business Bay"],
+            "ejari_property_type_en": ["Flat", "Flat", "Flat", "Flat"],
+            "annual_amount": [100000, 50000, 60000, 200000],
+            "actual_area": [800, 800, 800, 800],
+        }
+    )
     enriched = enrich_rent_contracts(df)
     assert enriched.filter(pl.col("area_name_en") == "Dubai Marina")["area_tier"][0] == "Premium"
     assert enriched.filter(pl.col("area_name_en") == "International City")["area_tier"][0] == "Budget"
@@ -19,36 +21,42 @@ def test_enrichment_tier_mapping():
 
 
 def test_enrichment_psf_null_for_small_area():
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina"] * 3,
-        "ejari_property_type_en": ["Flat"] * 3,
-        "annual_amount": [100000, 50000, 60000],
-        "actual_area": [1.0, 15.9, 199],
-        "property_usage_en": ["Residential"] * 3,
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina"] * 3,
+            "ejari_property_type_en": ["Flat"] * 3,
+            "annual_amount": [100000, 50000, 60000],
+            "actual_area": [1.0, 15.9, 199],
+            "property_usage_en": ["Residential"] * 3,
+        }
+    )
     enriched = enrich_rent_contracts(df)
     assert enriched["price_per_sqft"].null_count() == 3, "PSF must be null for area <200"
 
 
 def test_enrichment_psf_valid():
-    df = pl.DataFrame({
-        "area_name_en": ["Dubai Marina"],
-        "ejari_property_type_en": ["Flat"],
-        "annual_amount": [100000],
-        "actual_area": [1000],
-        "property_usage_en": ["Residential"],
-    })
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina"],
+            "ejari_property_type_en": ["Flat"],
+            "annual_amount": [100000],
+            "actual_area": [1000],
+            "property_usage_en": ["Residential"],
+        }
+    )
     enriched = enrich_rent_contracts(df)
     assert enriched["price_per_sqft"][0] == 100.0
 
 
 def test_market_analytics_psf_filter():
     # 1 valid residential PSF 50, 1 outlier 5000, 1 small area filtered by >=200
-    df = pl.DataFrame({
-        "annual_amount": [50000, 5000000, 100000],
-        "actual_area": [1000, 1000, 50],
-        "property_usage_en": ["Residential", "Residential", "Residential"],
-    })
+    df = pl.DataFrame(
+        {
+            "annual_amount": [50000, 5000000, 100000],
+            "actual_area": [1000, 1000, 50],
+            "property_usage_en": ["Residential", "Residential", "Residential"],
+        }
+    )
     ma = MarketAnalytics(df)
     psf = ma.calculate_psf_metrics()
     # only first row should survive (50 PSF in 20-500, area 1000)
@@ -58,8 +66,24 @@ def test_market_analytics_psf_filter():
 
 def test_bulk_flag_detection():
     # 11 same area+amount → bulk, 5 same → not bulk
-    bulk_rows = [{"area_name_en": "Naif", "annual_amount": 1540471, "ejari_property_type_en": "Flat", "actual_area": 500, "property_usage_en": "Commercial"}] * 11
-    normal_rows = [{"area_name_en": "Naif", "annual_amount": 50000, "ejari_property_type_en": "Flat", "actual_area": 500, "property_usage_en": "Commercial"}] * 5
+    bulk_rows = [
+        {
+            "area_name_en": "Naif",
+            "annual_amount": 1540471,
+            "ejari_property_type_en": "Flat",
+            "actual_area": 500,
+            "property_usage_en": "Commercial",
+        }
+    ] * 11
+    normal_rows = [
+        {
+            "area_name_en": "Naif",
+            "annual_amount": 50000,
+            "ejari_property_type_en": "Flat",
+            "actual_area": 500,
+            "property_usage_en": "Commercial",
+        }
+    ] * 5
     df = pl.DataFrame(bulk_rows + normal_rows)
     enriched = enrich_rent_contracts(df)
     assert enriched.filter(pl.col("annual_amount") == 1540471)["is_bulk_registration"].all()
@@ -80,13 +104,17 @@ def test_property_usage_psf_respects_the_200_sqft_floor(tmp_path):
     from lib.classes.silver_contract import to_silver
     from lib.classes.property_usage import PropertyUsage
 
-    silver = to_silver(pl.DataFrame({
-        "area_name_en": ["Dubai Marina"] * 3,
-        "property_usage_en": ["Residential"] * 3,
-        "annual_amount": [100000, 15000, 300000],
-        "actual_area": [1.0, 150.0, 1000.0],
-        "RN": [1, 2, 3],
-    })).frame
+    silver = to_silver(
+        pl.DataFrame(
+            {
+                "area_name_en": ["Dubai Marina"] * 3,
+                "property_usage_en": ["Residential"] * 3,
+                "annual_amount": [100000, 15000, 300000],
+                "actual_area": [1.0, 150.0, 1000.0],
+                "RN": [1, 2, 3],
+            }
+        )
+    ).frame
     assert silver["rent_per_sqft"].to_list()[:2] == [None, None], (
         "fixture is wrong: the two sub-200 sqft rows must already be nulled by Silver"
     )
@@ -113,11 +141,13 @@ def test_property_usage_omits_psf_when_the_column_is_absent(tmp_path):
 
     src = tmp_path / "legacy.parquet"
     out = tmp_path / "property_usage.csv"
-    pl.DataFrame({
-        "property_usage_en": ["Residential", "Residential"],
-        "annual_amount": [100000.0, 300000.0],
-        "actual_area": [1.0, 1000.0],
-    }).write_parquet(src)
+    pl.DataFrame(
+        {
+            "property_usage_en": ["Residential", "Residential"],
+            "annual_amount": [100000.0, 300000.0],
+            "actual_area": [1.0, 1000.0],
+        }
+    ).write_parquet(src)
     PropertyUsage(str(out)).transform(str(src))
 
     report = pl.read_csv(out)
@@ -139,21 +169,27 @@ def test_both_psf_surfaces_share_one_band_rule(tmp_path):
     from lib.classes.silver_contract import to_silver
     from lib.config import psf_band_filter
 
-    probe = pl.DataFrame({
-        "property_usage_en": ["Residential", "Residential"],
-        "psf": [600.0, 200.0],
-    })
+    probe = pl.DataFrame(
+        {
+            "property_usage_en": ["Residential", "Residential"],
+            "psf": [600.0, 200.0],
+        }
+    )
     assert probe.filter(psf_band_filter("psf"))["psf"].to_list() == [200.0], (
         "the helper itself must reject 600 and accept 200 for Residential"
     )
 
-    silver = to_silver(pl.DataFrame({
-        "area_name_en": ["Dubai Marina"] * 2,
-        "property_usage_en": ["Residential"] * 2,
-        "annual_amount": [200000, 600000],
-        "actual_area": [1000.0, 1000.0],
-        "RN": [1, 2],
-    })).frame
+    silver = to_silver(
+        pl.DataFrame(
+            {
+                "area_name_en": ["Dubai Marina"] * 2,
+                "property_usage_en": ["Residential"] * 2,
+                "annual_amount": [200000, 600000],
+                "actual_area": [1000.0, 1000.0],
+                "RN": [1, 2],
+            }
+        )
+    ).frame
     # both rows clear the 200 sqft floor, so the floor is NOT what filters them
     assert silver["rent_per_sqft"].to_list() == [200.0, 600.0]
 
@@ -188,13 +224,17 @@ def test_sub_200_sqft_rows_are_excluded_even_when_their_psf_is_inside_the_band(t
     from lib.classes.property_usage import PropertyUsage
     from lib.classes.silver_contract import to_silver
 
-    silver = to_silver(pl.DataFrame({
-        "area_name_en": ["Dubai Marina"] * 2,
-        "property_usage_en": ["Residential"] * 2,
-        "annual_amount": [15000, 300000],
-        "actual_area": [150.0, 1000.0],
-        "RN": [1, 2],
-    })).frame
+    silver = to_silver(
+        pl.DataFrame(
+            {
+                "area_name_en": ["Dubai Marina"] * 2,
+                "property_usage_en": ["Residential"] * 2,
+                "annual_amount": [15000, 300000],
+                "actual_area": [150.0, 1000.0],
+                "RN": [1, 2],
+            }
+        )
+    ).frame
     # the fixture is only meaningful if the sub-200 row is INSIDE the band
     assert 20 <= 15000 / 150 <= 500, "fixture is wrong: the 150 sqft row must be in-band"
     assert silver["rent_per_sqft"].to_list() == [None, 300.0], (
@@ -213,14 +253,56 @@ def test_sub_200_sqft_rows_are_excluded_even_when_their_psf_is_inside_the_band(t
 
 
 def test_validator_gate_no_crash_on_small_df():
-    df = pl.DataFrame({
-        "contract_id": [1, 2],
-        "contract_start_date": [None, None],
-        "property_usage_en": ["Residential", "Commercial"],
-        "annual_amount": [50000, 70000],
-        "actual_area": [1.0, 15.9],
-    })
+    df = pl.DataFrame(
+        {
+            "contract_id": [1, 2],
+            "contract_start_date": [None, None],
+            "property_usage_en": ["Residential", "Commercial"],
+            "annual_amount": [50000, 70000],
+            "actual_area": [1.0, 15.9],
+        }
+    )
     result = validate_rent_contracts(df, strict=False)
     # should not crash, warnings for small area
     assert result is not None
     assert "Validating 2 records" in result.info[0]
+
+
+def test_psf_min_area_sqft_has_one_owner_and_all_surfaces_honour_it():
+    """The 200 sqft floor has a single owner, lib.config.PSF_MIN_AREA_SQFT, and all
+    three PSF surfaces honour it: 199 sqft is nulled, exactly 200 is kept.
+
+    Boundary, not approximate: 199 is the largest failing value and 200 the smallest
+    passing one, so an off-by-one in the shared guard fails here. The amounts keep the
+    PSF inside the 20-500 residential band (~200 either way), so the floor — not the
+    band — is what removes the 199 row.
+    """
+    import lib.config as config
+    from lib.classes import silver_contract
+    from lib.classes.market_analytics import MarketAnalytics
+    from lib.classes.silver_contract import to_silver
+    from lib.transform.enrichment import enrich_rent_contracts
+
+    assert silver_contract.PSF_MIN_AREA_SQFT is config.PSF_MIN_AREA_SQFT
+
+    df = pl.DataFrame(
+        {
+            "area_name_en": ["Dubai Marina", "Dubai Marina"],
+            "property_usage_en": ["Residential", "Residential"],
+            "annual_amount": [39800.0, 40000.0],
+            "actual_area": [199.0, 200.0],
+            "RN": [1, 2],
+        }
+    )
+
+    # 1. Silver: the per-row guard
+    silver = to_silver(df).frame
+    assert silver["rent_per_sqft"].to_list() == [None, 200.0]
+
+    # 2. enrichment: the frame-level column
+    enriched = enrich_rent_contracts(df)
+    assert enriched["price_per_sqft"].to_list() == [None, 200.0]
+
+    # 3. MarketAnalytics: derives psf via the shared expression, then bands it
+    ma_psf = MarketAnalytics(silver).calculate_psf_metrics()["psf"].to_list()
+    assert ma_psf == [200.0]

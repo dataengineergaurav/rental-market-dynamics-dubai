@@ -9,6 +9,7 @@ same-named asset.
 Usage:
   uv run python -m lib.workspace.publish_layers --artifact output/rents_layers.duckdb --data-through 2026-10-05
 """
+
 from __future__ import annotations
 
 import argparse

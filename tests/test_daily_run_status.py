@@ -1,6 +1,7 @@
 """Tests for the daily run-status helpers in run_etl_pipeline
 (`_data_rows`, `_write_run_status`) — the fail-open no-data record, unrelated to the layers build.
 """
+
 from __future__ import annotations
 
 import csv

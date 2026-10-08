@@ -35,7 +35,7 @@ Four traps in this stack. Each one has produced a green suite over broken code.
 ```python
 pl.DataFrame({"n": [1, 2]}, schema={"n": pl.UInt32}).equals(
     pl.DataFrame({"n": [1, 2]}, schema={"n": pl.Int64})
-)   # True — a UInt32/Int64 regression is invisible here
+)  # True — a UInt32/Int64 regression is invisible here
 ```
 
 Assert `frame.schema` explicitly when the dtype is the thing under test. This matters here
@@ -45,8 +45,8 @@ because `pl.len()` yields `UInt32` while the published Gold artifacts carry `n` 
 ### `pl.DataFrame(records)` infers schema from the first 100 rows only
 
 ```python
-pl.DataFrame(records)                    # field null in rows 1-100, string at 101 -> ComputeError
-pl.DataFrame(records, infer_schema_length=None)   # scan the whole thing
+pl.DataFrame(records)  # field null in rows 1-100, string at 101 -> ComputeError
+pl.DataFrame(records, infer_schema_length=None)  # scan the whole thing
 ```
 
 Real, not hypothetical: `output/rent_contracts_20260916.csv` has a `MASTER_PROJECT_EN` value at
@@ -57,7 +57,7 @@ on both of its constructions.
 ### Temporal accessors return `Int8`
 
 ```python
-pl.col("t").dt.hour() * 3600     # 1 * 3600 wraps to 16
+pl.col("t").dt.hour() * 3600  # 1 * 3600 wraps to 16
 ```
 
 `dt.hour()`, `dt.minute()` and `dt.second()` are `Int8`; multiply before widening, or compute in
@@ -67,9 +67,11 @@ seconds and cast: `pl.col("t").dt.hour().cast(pl.Int32) * 3600`.
 
 Three separate footguns, all silent unless you look:
 
-- **A leading-underscore field with an explicit `Field()` raises `NameError` at class-definition
-  time** — not at instantiation — so the whole module fails to import, and everything that
-  imports it dies with it. The bare-default (`_x: Optional[int] = None`) and bare-annotation
+- **A leading-underscore field with an explicit `Field()` raises at class-definition time** — not
+  at instantiation — so the whole module fails to import, and everything that imports it dies with
+  it. The exception *type* is pydantic-version dependent (older pydantic raised `NameError`,
+  >= 2.13 raises `PydanticUserError`); either way it fails loudly. The bare-default
+  (`_x: Optional[int] = None`) and bare-annotation
   (`_x: Optional[int]`) forms are accepted, but as *private attributes*, silently absent from
   `model_fields` and never validated. There is no correct form: don't name fields with a leading
   underscore. `tests/test_silver_contract.py:63` pins this.

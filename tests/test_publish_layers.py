@@ -3,6 +3,7 @@
 There is one release per data date; the bronze CSV and the cumulative DuckDB share the tag. The
 publisher adds the DuckDB to that release (reused if the bronze job already created it).
 """
+
 from __future__ import annotations
 
 import os
@@ -69,9 +70,7 @@ def test_missing_artifact_fails_before_any_upload(requests_mock, tmp_path):
         publish_layers(tmp_path / "missing.duckdb", repo=REPO, data_through="2026-10-05")
 
     created = [
-        r
-        for r in requests_mock.request_history
-        if r.method == "POST" and r.url == f"{API}/repos/{REPO}/releases"
+        r for r in requests_mock.request_history if r.method == "POST" and r.url == f"{API}/repos/{REPO}/releases"
     ]
     assert created == [], "no release may be created when the artifact is missing"
 
