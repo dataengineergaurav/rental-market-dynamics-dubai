@@ -28,6 +28,8 @@ Three gaps surfaced while reading the release history (315 releases, 313 daily:
 3. **One publish client.** Weekly Silver/Gold publication goes through
    `lib.workspace.publish_layers` over `GitHubRelease` (which now accepts a release name/body and
    clobbers existing assets). The workflow and Makefile call its CLI; no `gh` release logic remains.
+   *(The "weekly" cadence is superseded by [ADR-10](0010-cumulative-combined-layers-duckdb.md); the
+   daily layers job uses this same client.)*
 
 ## Rationale
 
@@ -53,13 +55,16 @@ Three gaps surfaced while reading the release history (315 releases, 313 daily:
 
 ## Consequences
 
-- `release-YYYY-MM-DD` may now contain no CSV (quiet day). The weekly rehydrate downloads
-  `--pattern "rent_contracts_*.csv"`, so markers do not disturb it.
+- `release-YYYY-MM-DD` may now contain no CSV (quiet day). The layers ingest downloads
+  `--pattern "rent_contracts_*.csv"`, so markers do not disturb it. *(This is the daily
+  `daily_layers.yml` job, the successor to the weekly rehydrate; see
+  [ADR-10](0010-cumulative-combined-layers-duckdb.md).)*
 - `publish_artifacts_to_github` gained a `data_date` parameter; the no-data branch now publishes.
 - `RAW_RENTS_CSV_DTYPES` is larger but mechanical; adding a payload column without pinning it fails
   `tests/test_raw_schema.py`.
-- `make weekly-publish` and `weekly.yml` now run `python -m lib.workspace.publish_layers` and require
-  a GitHub token with `repo` scope (as before).
+- `make layers-publish` and `daily_layers.yml` (the successors to `make weekly-publish` / `weekly.yml`)
+  run `python -m lib.workspace.publish_layers` and require a GitHub token with `repo` scope (as
+  before).
 
 ## Verification
 

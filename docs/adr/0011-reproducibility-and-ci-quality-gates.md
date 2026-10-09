@@ -74,7 +74,8 @@ Adopt the reproducible, gated baseline for this repo:
 
 ## Verification
 
-- `make check` — ruff clean, coverage ≥ floor, 135 tests pass.
+- `make check` — ruff clean, coverage ≥ floor, the full test suite passes. (The suite grows; the
+  gate is the floor, not a fixed test count.)
 - `tests/test_logging_redaction.py` — the download log line carries neither the query string nor a
   token; `_redact_url` handles bare and unparseable input.
 - `tests/test_p0_gates.py::test_psf_min_area_sqft_has_one_owner_and_all_surfaces_honour_it` —

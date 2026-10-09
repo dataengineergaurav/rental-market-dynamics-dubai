@@ -1,11 +1,15 @@
 # Dubai Rental Market Data — Release Notes
 
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-09
 **Data source:** Dubai Land Department (DLD) — Ejari rent transactions
 
 This file describes the artifacts the pipeline currently publishes, organized as a
 **bronze → silver → gold** flow. Per-release history lives on
 [GitHub Releases](https://github.com/dataengineergaurav/rental-market-dynamics-dubai/releases).
+
+> New here? The [analyst cookbook](docs/ANALYST_COOKBOOK.md) shows the queries these artifacts
+> are built for, and the [data dictionary](docs/DATA_DICTIONARY.md) documents every table and
+> view.
 
 ## Artifacts
 

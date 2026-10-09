@@ -2,7 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+Entries are listed newest-first. Items marked **superseded by
+[ADR-10](docs/adr/0010-cumulative-combined-layers-duckdb.md)** describe the earlier *weekly*
+architecture (two-file Silver/Gold releases, cross-file dedup, a weekly freshness gate); that
+apparatus was replaced by a single cumulative daily DuckDB and no longer exists in the tree.
+They are kept as history, not as current behaviour.
+
 ## Unreleased
+
+- **Documentation overhaul.** Added a [documentation hub](docs/README.md),
+  [architecture](docs/ARCHITECTURE.md), [data dictionary](docs/DATA_DICTIONARY.md),
+  [analyst cookbook](docs/ANALYST_COOKBOOK.md), [operations runbook](docs/OPERATIONS.md) and an
+  [ADR index](docs/adr/README.md); corrected stale weekly-era references across the README,
+  CONTRIBUTING, the library guide and ADR-07/08/09/11.
 
 - **Reproducible dependencies and a CI quality gate.** Dependencies resolve through `uv` and a
   `uv.lock` is committed; `polars` is bounded (`>=1.0,<2`); dev tooling moves to the `dev` group
@@ -44,29 +56,37 @@ All notable changes to this project will be documented in this file.
   fails if a payload column is added without pinning it.
 - **One publish client.** Weekly Silver/Gold publication moved off the `gh` CLI (workflow + Makefile)
   to `lib.workspace.publish_layers` over `GitHubRelease`; daily bronze and weekly layers now share a
-  single publish path that clobbers existing assets.
-- **Layered Bronze/Silver/Gold releases.** The weekly artifact is split into two DuckDBs:
+  single publish path that clobbers existing assets. *(The "weekly" layer is superseded by ADR-10; the
+  daily layers job shares this same publish path.)*
+- **Layered Bronze/Silver/Gold releases.** *(Superseded by
+  [ADR-10](docs/adr/0010-cumulative-combined-layers-duckdb.md): the two-file split was replaced by
+  one combined `rents_layers.duckdb`.)* The weekly artifact is split into two DuckDBs:
   `silver_YYYYWww.duckdb` (normalized `DimArea`, `DimPropertyType`, `DimMetro`, `FctContract`,
   `_meta` tables) tagged `release-silver-YYYYWww`, and `gold_YYYYWww.duckdb` (seven analytics
   views over the attached Silver tables) tagged `release-gold-YYYYWww`. The daily raw CSV remains
   the bronze layer (`release-YYYY-MM-DD`). Gold views are defined against the `silver` catalog
   alias, so consumers attach Silver first (`lib/analysis/layers.connect_gold`). See
   [ADR-08](docs/adr/0008-layered-bronze-silver-gold-releases.md).
-- **Weekly cross-file dedup.** The weekly DuckDB build now drops rows repeating a Silver `row_hash`
+- **Weekly cross-file dedup.** *(Superseded by
+  [ADR-10](docs/adr/0010-cumulative-combined-layers-duckdb.md): the `contract_id` primary key replaces
+  the `row_hash` dedup code.)* The weekly DuckDB build now drops rows repeating a Silver `row_hash`
   first seen in an earlier daily file, before enrichment, so the 2-day extract window no longer
   double-counts into the Gold medians and counts. Within-file repeats (bulk registrations) are
   preserved. `_meta` gains `pooled_rows`, `deduped_rows` and `row_hash_duplicates_removed`.
-- **Weekly freshness gate.** The build raises instead of publishing when a day in the requested
-  window has no usable daily CSV, or when the newest registration trails the window end. Thresholds
-  live in `lib/config.py` (`WEEKLY_FRESHNESS_GATE`); `_meta` gains `daily_files`,
-  `expected_daily_files`, `missing_daily_files` and `data_through`.
+- **Weekly freshness gate.** *(Superseded by
+  [ADR-10](docs/adr/0010-cumulative-combined-layers-duckdb.md): replaced by the one-day
+  `MAX_REGISTRATION_LAG_DAYS` stall check in the daily ingest.)* The build raises instead of publishing
+  when a day in the requested window has no usable daily CSV, or when the newest registration trails
+  the window end. Thresholds live in `lib/config.py` (`WEEKLY_FRESHNESS_GATE`); `_meta` gains
+  `daily_files`, `expected_daily_files`, `missing_daily_files` and `data_through`.
 - **Explicit no-data record.** The daily pipeline writes `output/etl_status.json` and logs a
   greppable `NO_NEW_DATA` line for an empty incremental window instead of returning silently. It
   remains fail-open (ADR-03); a missing file after download is no longer treated as "no data".
-- `make weekly` now derives the previous complete ISO week instead of hardcoded dates.
+- `make weekly` now derives the previous complete ISO week instead of hardcoded dates. *(The target
+  is superseded by ADR-10; it is now `make layers`.)*
 - Fixed the repository owner in README badges and clone URL; rewrote stale release notes.
 - Added [ADR-07](docs/adr/0007-weekly-cross-file-dedup-and-freshness-gate.md) and
-  `tests/test_weekly_dedup_and_gate.py`.
+  `tests/test_weekly_dedup_and_gate.py`. *(Both superseded by ADR-10; the test file no longer exists.)*
 
 ## Released
 

@@ -1,6 +1,12 @@
 # ADR-08: Bronze / Silver / Gold published as separate layer releases
 
-**Status:** Accepted · **Date:** 2026-10-06
+**Status:** Accepted · **Superseded by [ADR-10](0010-cumulative-combined-layers-duckdb.md)** · **Date:** 2026-10-06
+
+> **Superseded (2026-10-06).** ADR-10 collapsed the two weekly DuckDBs into one cumulative
+> `rents_layers.duckdb` holding the Silver tables and Gold views together, so a plain
+> `duckdb.connect` resolves every view — no `ATTACH`, no `connect_gold`, no `silver_YYYYWww` /
+> `gold_YYYYWww` tags. The tests cited under **Verification** below no longer exist. Read this ADR
+> as history.
 
 ## Context
 

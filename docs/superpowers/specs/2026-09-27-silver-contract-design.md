@@ -6,6 +6,13 @@
 **Parent:** `docs/IMPLEMENTATION_PLAN.md` · `docs/EXPERT_REVIEW_AND_ROADMAP.md`
 **Evidence base:** `output/rent_contracts_20260917.csv` — 4306 rows × 44 columns, decoded strict UTF-8; cross-checked against 4 further daily files (16,075 rows total)
 
+> **Historical.** This spec was approved on 2026-09-27 and predates
+> [ADR-10](../../adr/0010-cumulative-combined-layers-duckdb.md), which replaced the weekly
+> two-file build it references with a single cumulative DuckDB. Some code pointers below (e.g.
+> `build_weekly_duckdb.py`) name files that no longer exist. For the current system read
+> [ARCHITECTURE](../../ARCHITECTURE.md) and the [ADRs](../../adr/README.md); this spec remains the
+> field-by-field rationale for the Silver row contract.
+
 ---
 
 ## 1. Problem

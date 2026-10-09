@@ -282,8 +282,8 @@ def publish_artifacts_to_github(
         if data_date:
             tag_name = f"release-{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
         else:
-            # tag the release with the data date (from rent_contracts_YYYYMMDD.csv) so
-            # weekly rehydrate (release-<Mon..Sun>) keeps matching tag <-> file
+            # tag the release with the data date (from rent_contracts_YYYYMMDD.csv) so the
+            # layers ingest keeps matching tag <-> file (release-YYYY-MM-DD)
             tag_name = None
             for f in existing_files:
                 m = re.search(r"rent_contracts_(\d{4})(\d{2})(\d{2})", os.path.basename(f))
@@ -330,7 +330,8 @@ def main():
 
         # incremental: an empty/placeholder CSV means no new rows — successful,
         # but recorded explicitly rather than returning silently (ADR-03 keeps
-        # this fail-open; the weekly builder is where a stall becomes a defect).
+        # this fail-open; the layers ingest is where a stall becomes a defect,
+        # via MAX_REGISTRATION_LAG_DAYS).
         # A MISSING file is deliberately not this case: download_rents guarantees
         # a file via touch(), so absence is an anomaly that must reach transform
         # and fail, not be reported as a quiet day.
