@@ -71,7 +71,7 @@ class GitHubRelease:
 
         The upload endpoint returns 422 when an asset of the same name already exists, so a
         same-day re-run of the daily job could not refresh its CSV. Deleting first makes the
-        upload idempotent (the weekly path already uses `gh release upload --clobber`).
+        upload idempotent for every publisher that goes through this client.
         """
         assets_url = release.get("assets_url")
         if not assets_url and release.get("id"):

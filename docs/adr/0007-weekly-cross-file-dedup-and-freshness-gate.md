@@ -1,6 +1,11 @@
 # ADR-07: Cross-file dedup and a freshness gate in the weekly build
 
-**Status:** Accepted · **Date:** 2026-10-05
+**Status:** Accepted · **Superseded by [ADR-10](0010-cumulative-combined-layers-duckdb.md)** · **Date:** 2026-10-05
+
+> **Superseded (2026-10-06).** ADR-10 replaced the weekly build — and the window / dedup / gate
+> machinery this ADR describes — with a single cumulative daily DuckDB upserted on a `contract_id`
+> primary key. The `row_hash` dedup code, `WEEKLY_FRESHNESS_GATE`, `build_weekly_duckdb.py` and the
+> tests cited under **Verification** below no longer exist. Read this ADR as history.
 
 ## Context
 

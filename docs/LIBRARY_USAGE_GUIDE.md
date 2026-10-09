@@ -4,6 +4,9 @@
 
 This enhanced library provides comprehensive tools for analyzing Dubai rental market data from the Dubai Land Department. The library now includes advanced market analytics, data validation, and enrichment capabilities.
 
+> For the system-level view see [ARCHITECTURE](ARCHITECTURE.md); for every table, column and
+> constant see the [DATA_DICTIONARY](DATA_DICTIONARY.md). This guide is the API reference.
+
 ## New Modules
 
 ### 1. Configuration Management (`lib/config.py`)
@@ -89,10 +92,12 @@ result.violation_counts
 ```
 
 Derived fields it adds: `duration_days`, `is_short_term`, `monthly_rent`, `rent_per_sqft` (null
-unless `actual_area >= 200`), `implied_years`, `psf_eligible`, `row_hash` (stable, for cross-day
-dedup — now actually applied at the weekly layer, which drops rows repeating an earlier daily file)
-and `record_id` (unique within a file). This is the surface `run_etl_pipeline.py` runs, and
-the one `lib/classes/validators.py` defers to for types and ranges.
+unless `actual_area >= 200`), `implied_years`, `psf_eligible`, `violations` (the named rules the
+row triggered) and the keys `row_hash` (stable fingerprint, excludes `RN`, safe across days) and
+`record_id` (`row_hash:RN`, unique within a file). `to_silver` never raises; a row pydantic cannot
+construct is quarantined, not dropped, so `len(frame) + len(quarantined) == df.height`. Ingest
+deduplicates on the `contract_id` primary key rather than on `row_hash`. This is the surface
+`run_etl_pipeline.py` runs, and the one `lib/classes/validators.py` defers to for types and ranges.
 
 ### 3. Market Analytics (`lib/classes/market_analytics.py`)
 
@@ -112,7 +117,7 @@ analytics = MarketAnalytics(df)
 psf_data = analytics.calculate_psf_metrics()
 
 # Analyze by area
-area_stats = analytics.analyze_by_area(area_column="area_en")
+area_stats = analytics.analyze_by_area(area_column="area_name_en")
 print(area_stats)
 
 # Identify high-demand areas
@@ -151,15 +156,16 @@ df = pl.read_parquet("rent_contracts.parquet")
 enriched_df = enrich_rent_contracts(df)
 
 # New columns added:
-# - price_per_sqft: Rent per square foot
+# - price_per_sqft: Rent per square foot (null below the 200 sqft floor)
 # - area_tier: Area classification (Premium/Mid-Tier/Budget/Emerging)
 # - property_type_normalized: Standardized property type
-# - registration_year, registration_quarter, registration_month: Temporal features
-# - registration_season: Season classification
+# - contract_year, contract_quarter, contract_month, contract_weekday: Temporal features
+# - contract_season: Season classification (Winter/Spring/Summer/Fall)
 # - contract_duration_days: Contract length in days
 # - contract_duration_category: Short/Medium/Long-term
 # - is_luxury: Luxury property flag
 # - usage_category: Simplified category (Residential/Commercial/Other)
+# - is_bulk_registration: Same (area, amount) repeated > 10 times
 
 # Save enriched data
 enriched_df.write_parquet("rent_contracts_enriched.parquet")
@@ -314,10 +320,10 @@ GH_TOKEN=your_github_token
 ### Validation Thresholds
 
 Customize validation thresholds in `lib/config.py`. The rent and size bounds are read by the
-Silver contract's `_derive_and_collect` (`lib/classes/silver_contract.py:167`), not by
+Silver contract's `_derive_and_collect` (in `lib/classes/silver_contract.py`), not by
 `validators.py`; `psf_band_filter` reads the PSF bounds. `min_property_size` is the validity
-range, not the PSF floor — that is `PSF_MIN_AREA_SQFT` in `silver_contract.py`, deliberately a
-separate constant.
+range, not the PSF floor — the floor is `PSF_MIN_AREA_SQFT` in `lib/config.py`, deliberately a
+separate constant (see [DATA_DICTIONARY §PSF](DATA_DICTIONARY.md#psf)).
 
 ```python
 VALIDATION_THRESHOLDS = {
@@ -347,14 +353,21 @@ AREA_CLASSIFICATIONS = {
 
 The enhanced library generates the following outputs:
 
-1. **rent_contracts_YYYY-MM-DD.parquet** - Transformed data
-2. **rent_contracts_enriched_YYYY-MM-DD.parquet** - Enriched data with calculated fields
-3. **property_usage_report_YYYY-MM-DD.csv** - Comprehensive usage statistics
-4. **area_analysis_YYYY-MM-DD.csv** - Area-wise market analysis
-5. **top_areas_YYYY-MM-DD.csv** - High-demand areas
-6. **property_type_analysis_YYYY-MM-DD.csv** - Property type statistics
-7. **monthly_trends_YYYY-MM-DD.csv** - Time-series trends
-8. **yoy_comparison_YYYY-MM-DD.csv** - Year-over-year comparison
+Files are named for the **data date** (`YYYYMMDD`), matching every other artifact in the repo
+(`output/rent_contracts_20260917.csv`, etc.):
+
+1. **rent_contracts_YYYYMMDD.parquet** - Transformed data
+2. **rent_contracts_enriched_YYYYMMDD.parquet** - Enriched data with calculated fields
+3. **property_usage_YYYYMMDD.csv** - Comprehensive usage statistics
+4. **area_analysis_YYYYMMDD.csv** - Area-wise market analysis
+5. **top_areas_YYYYMMDD.csv** - High-demand areas
+6. **property_type_analysis_YYYYMMDD.csv** - Property type statistics
+7. **monthly_trends_YYYYMMDD.csv** - Time-series trends
+8. **yoy_comparison_YYYYMMDD.csv** - Year-over-year comparison
+
+Only the raw `rent_contracts_YYYYMMDD.csv` is published to a release; the parquet and reports
+stay local. The queryable artifact is the cumulative `rents_layers.duckdb` (see
+[RELEASE_NOTES](../RELEASE_NOTES.md)).
 
 ## Dubai Market Insights
 
@@ -395,9 +408,9 @@ If validation fails, check:
 
 Use the **canonical snake_case** names, not the UPPERCASE source names — `RentsTransformer` adds
 the lowercase aliases and everything downstream reads those:
-- `actual_area` and `annual_amount` for PSF calculations (`market_analytics.calculate_psf_metrics:55`)
+- `actual_area` and `annual_amount` for PSF calculations (`market_analytics.calculate_psf_metrics`)
 - `rent_per_sqft` for the Silver-derived PSF; `price_per_sqft` if you ran `enrich_rent_contracts`
-- `contract_start_date` for trend analysis (`market_analytics.calculate_rental_trends:277`; the
+- `contract_start_date` for trend analysis (`market_analytics.calculate_rental_trends`; it is the
   default `date_column`, override it)
 - `area_name_en` for area-based analysis — **not** `area_en`
 - `property_usage_en` for any PSF band filter; it is what `psf_band_filter` keys on

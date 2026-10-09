@@ -5,19 +5,36 @@ Thank you for your interest in contributing to this project!
 ## How to Contribute
 
 1. **Fork the repository** and create your branch:
+
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b feat/your-feature-name
+   ```
 
 2. **Make your changes** while adhering to the project's coding standards.
 
-3. **Run tests** to ensure your changes do not break functionality:
-    ```bash
-    make test
-    ```
+3. **Run the quality gate** to ensure your changes do not break functionality or the build:
+
+   ```bash
+   make check   # lint + coverage (what CI runs)
+   make test    # the full test suite
+   ```
 
 4. **Commit your changes** with a clear commit message.
 
-5. **Open a Pull Request** against the dev branch.
+5. **Open a Pull Request** against `main`.
+
+## CI quality gate
+
+Every push to `dev`/`main` (and every tag) runs
+[`build_and_deploy.yml`](.github/workflows/build_and_deploy.yml): `make build && make test`,
+then `make lint` and `make coverage`. Lint is **high-signal only** (`F`, `E9`, `B` — undefined
+names, unused/duplicate imports, real-bug lints), not a style gate. Coverage is a **ratchet**
+(`COVERAGE_FLOOR := 75` in the Makefile): raise it as coverage improves, never lower it to pass.
+
+Push builds deliberately do **not** run the ETL — that would re-extract the current window and
+clobber the day's release. Releases are written only by `cron.yml` and `daily_layers.yml`. See
+[ADR-11](docs/adr/0011-reproducibility-and-ci-quality-gates.md) and
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## Code Style
 
@@ -39,8 +56,9 @@ pl.DataFrame({"n": [1, 2]}, schema={"n": pl.UInt32}).equals(
 ```
 
 Assert `frame.schema` explicitly when the dtype is the thing under test. This matters here
-because `pl.len()` yields `UInt32` while the published Gold artifacts carry `n` as `Int64`, and
-`polars` is unpinned in `pyproject.toml`, so an upgrade can move a dtype with no failure.
+because `pl.len()` yields `UInt32` while the published Gold artifacts carry `n` as `Int64`.
+`polars` is bounded (`>=1.0,<2`) and the environment is locked by `uv.lock`, but a manual
+upgrade inside that range can still move a dtype with no failure.
 
 ### `pl.DataFrame(records)` infers schema from the first 100 rows only
 
@@ -51,8 +69,8 @@ pl.DataFrame(records, infer_schema_length=None)  # scan the whole thing
 
 Real, not hypothetical: `output/rent_contracts_20260916.csv` has a `MASTER_PROJECT_EN` value at
 row 101 ("Hills Park"). Four of the five daily files pass without the flag and one crashes, so
-this looks like flaky data rather than a code bug. `lib/classes/silver_contract.py:506` sets it
-on both of its constructions.
+this looks like flaky data rather than a code bug. The two `pl.DataFrame(...)` constructions in
+`lib/classes/silver_contract.py::to_silver` set `infer_schema_length=None` for exactly this reason.
 
 ### Temporal accessors return `Int8`
 

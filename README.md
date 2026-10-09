@@ -127,7 +127,7 @@ lib/              Extract, transform, enrichment, analytics, release helpers
 rents_scraper/    Scrapy spider for Ejari rents
 output/           Daily CSVs, Parquet, the cumulative layers DuckDB
 tests/            Pipeline and data-quality gates
-docs/             Implementation plan, roadmap, library usage
+docs/             Documentation hub: architecture, data dictionary, analyst cookbook, operations, ADRs
 .github/          Daily ETL / daily layers / push workflows
 ```
 
@@ -139,12 +139,21 @@ combined `rents_layers.duckdb` — see
 Each day's release holds a full snapshot of the cumulative DuckDB as of that date, so any
 historical layer file is also directly retrievable.
 
-## Further reading
+## Documentation
 
+Start at the [documentation hub](docs/README.md), or jump straight to the part you need:
+
+- [Architecture](docs/ARCHITECTURE.md) — the pipeline end to end, the medallion contracts, and the invariants the tests pin
+- [Data dictionary](docs/DATA_DICTIONARY.md) — every table, view, column, code and constant
+- [Analyst cookbook](docs/ANALYST_COOKBOOK.md) — real market questions answered with SQL against the Gold views
+- [Operations](docs/OPERATIONS.md) — schedules, releases, commands, triage, release verification
 - [Library usage guide](docs/LIBRARY_USAGE_GUIDE.md) — `MarketAnalytics` / enrichment APIs
-- [ADR-06: pydantic v2 Silver contract](docs/adr/0006-pydantic-silver-contract.md)
-- [ADR-10: daily cumulative combined layers](docs/adr/0010-cumulative-combined-layers-duckdb.md)
+
+Decisions and history:
+
+- [ADRs](docs/adr/README.md) — [06](docs/adr/0006-pydantic-silver-contract.md) (pydantic Silver contract), [09](docs/adr/0009-release-hardening-raw-schema-and-markers.md) (release hardening), [10](docs/adr/0010-cumulative-combined-layers-duckdb.md) (cumulative combined layers), [11](docs/adr/0011-reproducibility-and-ci-quality-gates.md) (reproducible deps + CI gate). ADR-07/08 are superseded by ADR-10.
 - [Silver contract design](docs/superpowers/specs/2026-09-27-silver-contract-design.md) — field measurements and the market-health gate
+- [CHANGELOG](CHANGELOG.md) · [RELEASE_NOTES](RELEASE_NOTES.md) — what changed, and what each release contains
 
 ## Contributing
 
