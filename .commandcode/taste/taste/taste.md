@@ -10,3 +10,5 @@
 - Likes the agent to adopt an explicit expert persona/role (e.g. "act as a data engineer with an analytics engineering background") when analyzing code. Confidence: 0.5
 - Expects completed work to reach GitHub — checks whether changes were committed and pushed, and asks for it explicitly ("commit and push"). Confidence: 0.7
 - Approves of post-merge cleanup — fast-forwarding local `main` and deleting merged local and remote feature branches. Confidence: 0.5
+- Archives AI code reviews as markdown files inside the repo (observed convention: `.agents/reviews/semantic-review-multi-model/<timestamp>/review-<model>.md`) — runs multiple AI models over the same code and expects new reviews saved there alongside prior ones, following the existing naming convention. Confidence: 0.6
+- Manages Python projects with uv — commands run via `uv run --no-sync …` against a committed `uv.lock`, with pytest and ruff as the quality gates. Confidence: 0.6
