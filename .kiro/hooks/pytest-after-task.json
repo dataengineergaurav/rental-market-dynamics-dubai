@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Check After Task",
+      "trigger": "PostTaskExec",
+      "description": "After a spec task completes, runs `make check` (lint + coverage via uv).",
+      "action": {
+        "type": "command",
+        "command": "make check"
+      }
+    }
+  ]
+}

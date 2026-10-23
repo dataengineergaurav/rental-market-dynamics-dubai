@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Ruff Format and Lint on Save",
+      "trigger": "PostFileSave",
+      "description": "On saving a Python file, runs `make fmt` (ruff format + lint-fix via uv).",
+      "matcher": "\\.py$",
+      "action": {
+        "type": "command",
+        "command": "make fmt"
+      }
+    }
+  ]
+}
