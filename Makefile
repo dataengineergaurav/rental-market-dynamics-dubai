@@ -16,6 +16,10 @@ help:
 	@echo "  scrapy-rents - Scrapy rents Ejari (slow)"
 	@echo "  notebook - Execute the Jupyter Notebook"
 	@echo "  test     - Run tests"
+	@echo "  lint     - Lint and format-check with ruff"
+	@echo "  fmt      - Format and lint-fix with ruff (write changes)"
+	@echo "  coverage - Run tests with a coverage floor"
+	@echo "  check    - Lint + coverage (the CI quality gate)"
 	@echo "  clean    - Clean build artifacts and temporary files"
 
 # Clean: Remove build artifacts, temporary files, and caches
@@ -34,15 +38,13 @@ clean:
 # Build: Set up the environment and install dependencies
 build:
 	@echo "Building project..."
-	python --version
-	pip install --upgrade pip
-	pip install -r requirements.txt
-	pip install lib/
+	uv --version
+	uv sync
 
 # ETL: Ejari rents (EJARI_URL)
 etl:
 	@echo "Running Ejari rents ETL process..."
-	python run_etl_pipeline.py
+	uv run python run_etl_pipeline.py
 
 # Weekly: 7-day Mon-Sun pooled DuckDB from Releases daily CSVs
 weekly:
@@ -60,12 +62,33 @@ weekly-publish: weekly
 # Scrapy rents (paginated, slow ~10s/page) — must run inside rents_scraper/
 scrapy-rents:
 	@echo "Scraping rents via Scrapy (Ejari, slow ~10s/page)..."
-	cd rents_scraper && uv run scrapy crawl rents -O ../output/rents.jsonl --nolog || (cd rents_scraper && scrapy crawl rents -O ../output/rents.jsonl)
+	cd rents_scraper && uv run scrapy crawl rents -O ../output/rents.jsonl --nolog
 
 # Test: Run all tests using pytest
 test:
 	@echo "Running tests..."
-	pytest .
+	uv run pytest .
+
+# Lint: ruff checks (undefined names, unused imports, syntax, real-bug lints) and formatting.
+lint:
+	@echo "Linting with ruff..."
+	uv run ruff check .
+	uv run ruff format --check .
+
+# Fmt: write formatting + lint fixes (used by the save hook).
+fmt:
+	@echo "Formatting and lint-fixing with ruff..."
+	uv run ruff format .
+	uv run ruff check --fix .
+
+# Coverage: tests with a floor that ratchets (raise it as coverage improves, never lower to pass).
+COVERAGE_FLOOR := 75
+coverage:
+	@echo "Running tests with coverage (floor $(COVERAGE_FLOOR))..."
+	uv run pytest --cov=lib --cov-report=term-missing --cov-fail-under=$(COVERAGE_FLOOR)
+
+# Check: the full CI quality gate.
+check: lint coverage
 
 # Declare phony targets to avoid conflicts with files
-.PHONY: all help clean build etl test scrapy-rents
+.PHONY: all help clean build etl test lint fmt coverage check scrapy-rents weekly weekly-publish
