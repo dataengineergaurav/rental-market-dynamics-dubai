@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Skills Audit on Department Save",
+      "trigger": "PostFileSave",
+      "description": "On saving a department routing file (_department.md) — where leaf registration and routing-table edges live — validate the full skill hierarchy via make skills-audit. Leaf edits are covered by the manual target / CI, not on every save.",
+      "matcher": "_department\\.md$",
+      "action": {
+        "type": "command",
+        "command": "make skills-audit"
+      }
+    }
+  ]
+}

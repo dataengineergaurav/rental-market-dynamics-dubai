@@ -21,6 +21,7 @@ help:
 	@echo "  coverage - Run tests with a coverage floor"
 	@echo "  check    - Lint + coverage (the CI quality gate)"
 	@echo "  skills-check - Validate steering skill references (drift monitor)"
+	@echo "  skills-audit - skills-check + cross-skill communication graph check"
 	@echo "  movement - Week-over-week rent movement (two most recent weekly DuckDBs)"
 	@echo "  clean    - Clean build artifacts and temporary files"
 
@@ -98,6 +99,13 @@ skills-check:
 	@echo "Validating steering skill references..."
 	uv run python scripts/skills_check.py
 
+# Skills-audit: the full skill-hierarchy monitor — code references (skills-check)
+# AND the cross-skill communication graph (hands-off-to / routes-from edges and
+# department routing tables).
+skills-audit: skills-check
+	@echo "Validating cross-skill communication graph..."
+	uv run python scripts/skills_graph_check.py
+
 # Movement: week-over-week rent movement between the two most recent weekly
 # DuckDB artifacts. An honest two-point measurement of two gated medians.
 movement:
@@ -109,4 +117,4 @@ movement:
 	uv run python -m lib.analysis.wow_movement --from "$$FROM" --to "$$TO"
 
 # Declare phony targets to avoid conflicts with files
-.PHONY: all help clean build etl test lint fmt coverage check skills-check movement scrapy-rents weekly weekly-publish
+.PHONY: all help clean build etl test lint fmt coverage check skills-check skills-audit movement scrapy-rents weekly weekly-publish
