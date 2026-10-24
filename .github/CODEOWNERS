@@ -1,0 +1,15 @@
+# Code ownership for the steering skill hierarchy.
+# Each department folder has a clear owner; add finer-grained lines as leaves
+# gain distinct owners.
+
+# Company router + orchestrator + meta files
+/SKILL.md                                   @dataengineergaurav
+/.kiro/steering/orchestrator.md             @dataengineergaurav
+/.kiro/steering/_reference-map.md           @dataengineergaurav
+/.kiro/steering/_skill-template.md          @dataengineergaurav
+
+# Business Intelligence department
+/.kiro/steering/business-intelligence/      @dataengineergaurav
+
+# Engineering department
+/.kiro/steering/engineering/                @dataengineergaurav
