@@ -20,6 +20,8 @@ help:
 	@echo "  fmt      - Format and lint-fix with ruff (write changes)"
 	@echo "  coverage - Run tests with a coverage floor"
 	@echo "  check    - Lint + coverage (the CI quality gate)"
+	@echo "  skills-check - Validate steering skill references (drift monitor)"
+	@echo "  movement - Week-over-week rent movement (two most recent weekly DuckDBs)"
 	@echo "  clean    - Clean build artifacts and temporary files"
 
 # Clean: Remove build artifacts, temporary files, and caches
@@ -90,5 +92,21 @@ coverage:
 # Check: the full CI quality gate.
 check: lint coverage
 
+# Skills-check: drift monitor for the steering skill hierarchy. Verifies that
+# every code reference cited in .kiro/steering/ still resolves (file + symbol).
+skills-check:
+	@echo "Validating steering skill references..."
+	uv run python scripts/skills_check.py
+
+# Movement: week-over-week rent movement between the two most recent weekly
+# DuckDB artifacts. An honest two-point measurement of two gated medians.
+movement:
+	@echo "Computing week-over-week rent movement..."
+	@FILES=$$(ls output/rental_analytics_weekly_*.duckdb 2>/dev/null | sort | tail -2); \
+	test $$(echo "$$FILES" | grep -c .) -eq 2 || (echo "Need >=2 output/rental_analytics_weekly_*.duckdb files; run 'make weekly' first" && exit 1); \
+	FROM=$$(echo "$$FILES" | head -1); TO=$$(echo "$$FILES" | tail -1); \
+	echo "from $$FROM -> to $$TO"; \
+	uv run python -m lib.analysis.wow_movement --from "$$FROM" --to "$$TO"
+
 # Declare phony targets to avoid conflicts with files
-.PHONY: all help clean build etl test lint fmt coverage check scrapy-rents weekly weekly-publish
+.PHONY: all help clean build etl test lint fmt coverage check skills-check movement scrapy-rents weekly weekly-publish
